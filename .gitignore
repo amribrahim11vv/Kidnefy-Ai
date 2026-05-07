@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+
+# Virtual Environments
+.venv/
+venv/
+env/
+
+# Environment Variables
+.env
+*.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Generated at Runtime
+generated_reports/
+uploads/
+knowledge_base/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Model cache (keep models/ but ignore Keras cache)
+.keras/
+
+# Notebooks checkpoints
+.ipynb_checkpoints/
+
+# Testing
+.pytest_cache/
+htmlcov/
+.coverage

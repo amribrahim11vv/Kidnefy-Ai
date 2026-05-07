@@ -1,0 +1,1283 @@
+"""
+Kidney Disease Prediction API
+FastAPI web service for kidney disease prediction and staging.
+"""
+
+import os
+import sys
+from pathlib import Path
+from datetime import datetime
+from contextlib import asynccontextmanager
+from typing import Dict, Any, Optional, List
+from enum import Enum
+
+# Add src to path
+sys.path.insert(0, str(Path(__file__).parent))
+
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, BackgroundTasks
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+import uvicorn
+
+import pandas as pd
+import numpy as np
+
+# Import our modules
+from src.preprocessing import DataLoader, calculate_egfr, FeatureEngineer
+from src.models import EnsembleModel
+from src.staging import GFRCalculator, RiskAssessor, GFRStage, RiskLevel
+from src.reports import PDFReportGenerator, PatientInfo, TestResult
+from src.models.staging_model import StagingModel
+from src.monitoring import LongitudinalMonitor, SmartAlertEngine
+from src.explainability import SHAPExplainer
+from config import CORS_ORIGINS
+
+# Try to import OCR (may fail if dependencies not installed)
+try:
+    from src.ocr import LabImageExtractor
+    OCR_AVAILABLE = True
+except ImportError:
+    OCR_AVAILABLE = False
+    print("Warning: OCR dependencies not installed. Image processing will be disabled.")
+
+# Try to import RAG
+try:
+    from src.rag import GeminiRAG
+    RAG_AVAILABLE = True
+except ImportError:
+    RAG_AVAILABLE = False
+    print("Warning: RAG dependencies not installed. Chat feature will be disabled.")
+
+
+# =============================================================================
+# Pydantic Models (Request/Response Schemas)
+# =============================================================================
+
+class PatientData(BaseModel):
+    """Patient information for predictions."""
+    name: str = Field(default="Patient", description="Patient name")
+    age: int = Field(..., ge=1, le=120, description="Patient age in years")
+    sex: str = Field(default="male", description="Patient sex (male/female)")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "name": "محمد أحمد",
+                "age": 70,
+                "sex": "male"
+            }
+        }
+
+
+class LabValues(BaseModel):
+    """Laboratory test values for prediction."""
+    creatinine: float = Field(..., gt=0, description="Serum creatinine in mg/dL")
+    acr: Optional[float] = Field(None, ge=0, description="Albumin/Creatinine Ratio in mg/g")
+    blood_urea: Optional[float] = Field(None, ge=0, description="Blood urea in mg/dL")
+    hemoglobin: Optional[float] = Field(None, ge=0, description="Hemoglobin in g/dL")
+    blood_pressure: Optional[int] = Field(None, ge=0, description="Systolic blood pressure")
+    blood_glucose: Optional[float] = Field(None, ge=0, description="Blood glucose in mg/dL")
+    sodium: Optional[float] = Field(None, description="Sodium in mmol/L")
+    potassium: Optional[float] = Field(None, description="Potassium in mmol/L")
+    # New Features
+    hba1c: Optional[float] = Field(None, ge=0, description="HbA1c percentage")
+    uacr: Optional[float] = Field(None, ge=0, description="Urine Albumin-Creatinine Ratio")
+    uric_acid: Optional[float] = Field(None, ge=0, description="Uric Acid in mg/dL")
+    serum_albumin: Optional[float] = Field(None, ge=0, description="Serum Albumin in g/dL")
+    bmi: Optional[float] = Field(None, ge=0, description="Body Mass Index")
+    blood_pressure_diastolic: Optional[int] = Field(None, ge=0, description="Diastolic blood pressure")
+    diabetes_duration: Optional[int] = Field(None, ge=0, description="Diabetes duration in years")
+    # Categoricals (0/1 or similar)
+    smoking: Optional[int] = Field(None, description="Smoking status (0/1)")
+    dyslipidemia: Optional[int] = Field(None, description="Dyslipidemia status (0/1)")
+    diabetes_type: Optional[int] = Field(None, description="Diabetes type (0=None/Other, 1=Type1, 2=Type2 mapped appropriately)")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "creatinine": 2.3,
+                "acr": 44.44,
+                "blood_urea": 61,
+                "hemoglobin": 12.5
+            }
+        }
+
+
+class PredictionRequest(BaseModel):
+    """Request body for prediction endpoint."""
+    patient: PatientData
+    lab_values: LabValues
+
+
+class StageRequest(BaseModel):
+    """Request body for staging endpoint."""
+    creatinine: float = Field(..., gt=0)
+    age: int = Field(..., ge=1, le=120)
+    acr: Optional[float] = Field(None)
+    is_female: bool = Field(default=False)
+
+
+class GFRStageEnum(str, Enum):
+    G1 = "G1"
+    G2 = "G2"
+    G3a = "G3a"
+    G3b = "G3b"
+    G4 = "G4"
+    G5 = "G5"
+
+
+class RiskLevelEnum(str, Enum):
+    LOW = "Low Risk"
+    MODERATE = "Moderate Risk"
+    HIGH = "High Risk"
+    VERY_HIGH = "Very High Risk"
+    CRITICAL = "Critical - Kidney Failure"
+
+
+class StagingResult(BaseModel):
+    """Response for staging endpoint."""
+    egfr: float
+    gfr_stage: str
+    albuminuria_category: Optional[str]
+    risk_level: str
+    description: str
+    recommendations: List[str]
+    urgency_color: str
+
+
+class PredictionResult(BaseModel):
+    """Response for prediction endpoint."""
+    prediction: bool
+    probability: float
+    confidence: float
+    egfr: float
+    gfr_stage: str
+    albuminuria_category: Optional[str]
+    risk_level: str
+    progression_risk_percent: float
+    recommendations: List[str]
+    alerts: List[str]
+    ai_staging: Optional[Dict[str, Any]] = None
+    xai_explanation: Optional[Dict[str, Any]] = None
+
+
+class HealthResponse(BaseModel):
+    """Health check response."""
+    status: str
+    version: str
+    timestamp: str
+    model_loaded: bool
+    ocr_available: bool
+
+
+# =============================================================================
+# FastAPI Application
+# =============================================================================
+
+# --- Global instances (module-level, available before lifespan runs) ---
+gfr_calculator = GFRCalculator()
+risk_assessor = RiskAssessor()
+report_generator = PDFReportGenerator(output_dir="generated_reports")
+ensemble_model = None  # Will be loaded on startup
+staging_model = None   # AI Staging Model
+ocr_extractor = None
+rag_engine = None  # RAG for medical Q&A
+longitudinal_monitor = LongitudinalMonitor()
+smart_alert_engine = None  # Will be initialized on startup
+feature_engineer = FeatureEngineer()
+shap_explainer = SHAPExplainer()
+xai_ready = False
+
+
+# =============================================================================
+# Lifespan (replaces deprecated @app.on_event — FastAPI >= 0.93)
+# =============================================================================
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Initialize models on startup, clean up on shutdown."""
+    global ensemble_model, ocr_extractor, rag_engine, staging_model, xai_ready, smart_alert_engine
+
+    print(" Starting Kidney Disease Prediction API...")
+
+    # Create directories
+    Path("generated_reports").mkdir(exist_ok=True)
+    Path("uploads").mkdir(exist_ok=True)
+
+    # Load ML ensemble (metadata + joblib checkpoints + optional DL)
+    model_path = Path("models")
+    if model_path.exists():
+        try:
+            ensemble_model = EnsembleModel(str(model_path))
+            ensemble_model.load()
+            if ensemble_model.is_trained:
+                print("✅ ML models loaded successfully")
+            else:
+                print("⚠️ No trained ML checkpoints found under models/ (train or add .joblib files)")
+        except Exception as e:
+            print(f"⚠️ Could not load ML models: {e}")
+
+    xai_ready = False
+    if ensemble_model and ensemble_model.is_trained:
+        xgb_m = ensemble_model.ml_models.models.get("XGBoost")
+        if xgb_m is not None:
+            try:
+                n_feat = getattr(
+                    xgb_m, "n_features_in_", None
+                ) or (
+                    len(ensemble_model.feature_names) if ensemble_model.feature_names else 1
+                )
+                n_feat = max(1, int(n_feat))
+                rng = np.random.default_rng(42)
+                bg = rng.normal(0.0, 0.01, size=(min(100, max(10, n_feat)), n_feat)).astype(
+                    np.float64
+                )
+                shap_explainer.fit(xgb_m, bg, model_type="tree")
+                xai_ready = shap_explainer.explainer is not None
+                if xai_ready:
+                    print("✅ SHAP explainer initialized")
+            except Exception as e:
+                print(f"⚠️ SHAP initialization failed: {e}")
+
+    # Load Staging Model
+    try:
+        staging_model = StagingModel()
+    except Exception as e:
+        print(f"⚠️ Could not load Staging model: {e}")
+
+    # Initialize OCR
+    if OCR_AVAILABLE:
+        try:
+            ocr_extractor = LabImageExtractor()
+            print("✅ OCR engine initialized")
+        except Exception as e:
+            print(f"⚠️ OCR initialization failed: {e}")
+
+    # Initialize RAG
+    if RAG_AVAILABLE:
+        try:
+            rag_engine = GeminiRAG()
+            print("✅ RAG engine initialized")
+        except Exception as e:
+            print(f"⚠️ RAG initialization failed: {e}")
+
+    # Initialize Smart Alerts
+    smart_alert_engine = SmartAlertEngine(
+        monitor=longitudinal_monitor,
+        gemini_rag=rag_engine
+    )
+    print("✅ Smart Alert Engine initialized")
+
+    print("✅ API ready!")
+    yield
+    # Shutdown cleanup (if any) goes here
+
+
+app = FastAPI(
+    title="Kidney Disease Prediction API",
+    description="""
+    ## نظام التنبؤ بأمراض الكلى
+    
+    API for predicting chronic kidney disease (CKD) and diabetic nephropathy.
+    
+    ### Features:
+    - **Prediction**: ML/DL-based CKD prediction
+    - **Staging**: GFR-based kidney disease staging (G1-G5)
+    - **OCR**: Extract values from lab result images
+    - **Reports**: Generate PDF reports
+    
+    ### Endpoints:
+    - `POST /predict` - Predict CKD from lab values
+    - `POST /predict/image` - Predict from lab image (OCR)
+    - `POST /stage` - Calculate kidney disease stage
+    - `POST /egfr` - Calculate eGFR value
+    - `POST /report` - Generate PDF report
+    """,
+    version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
+    lifespan=lifespan
+)
+
+# CORS: wildcard origin cannot use credentials (browser + spec); use CORS_ORIGINS for production
+_cors_raw = (CORS_ORIGINS or "*").strip()
+if _cors_raw == "*":
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+else:
+    _origins = [o.strip() for o in _cors_raw.split(",") if o.strip()]
+    if not _origins:
+        _origins = ["*"]
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+
+# =============================================================================
+# Endpoints
+# =============================================================================
+
+@app.get("/", tags=["General"])
+async def root():
+    """Root endpoint with API info."""
+    return {
+        "message": "Kidney Disease Prediction API",
+        "version": "1.0.0",
+        "docs": "/docs",
+        "health": "/health"
+    }
+
+
+@app.get("/health", response_model=HealthResponse, tags=["General"])
+async def health_check():
+    """Health check endpoint."""
+    return HealthResponse(
+        status="healthy",
+        version="1.0.0",
+        timestamp=datetime.now().isoformat(),
+        model_loaded=ensemble_model is not None,
+        ocr_available=OCR_AVAILABLE and ocr_extractor is not None
+    )
+
+
+@app.post("/egfr", tags=["Calculations"])
+async def calculate_egfr_endpoint(
+    creatinine: float,
+    age: int,
+    is_female: bool = False
+):
+    """
+    Calculate eGFR (estimated Glomerular Filtration Rate).
+    
+    Uses CKD-EPI 2021 equation.
+    """
+    if creatinine <= 0 or age <= 0:
+        raise HTTPException(status_code=400, detail="Invalid input values")
+    
+    egfr = gfr_calculator.calculate_egfr_ckdepi(creatinine, age, is_female)
+    stage = gfr_calculator.get_gfr_stage(egfr)
+    
+    return {
+        "egfr": egfr,
+        "unit": "mL/min/1.73m²",
+        "gfr_stage": stage.value,
+        "interpretation": gfr_calculator.STAGE_DESCRIPTIONS.get(stage.value, "Unknown")
+    }
+
+
+@app.post("/stage", response_model=StagingResult, tags=["Staging"])
+async def calculate_stage(request: StageRequest):
+    """
+    Calculate complete kidney disease staging.
+    
+    Based on KDIGO guidelines using eGFR and ACR.
+    """
+    try:
+        result = gfr_calculator.calculate_stage(
+            creatinine=request.creatinine,
+            acr=request.acr,
+            age=request.age,
+            is_female=request.is_female
+        )
+        
+        return StagingResult(
+            egfr=result.egfr_value,
+            gfr_stage=result.gfr_stage.value,
+            albuminuria_category=result.albuminuria_category.value if result.albuminuria_category else None,
+            risk_level=result.risk_level.value,
+            description=result.description,
+            recommendations=result.recommendations,
+            urgency_color=result.urgency_color
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/predict", response_model=PredictionResult, tags=["Prediction"])
+async def predict(request: PredictionRequest):
+    """
+    Predict CKD from patient data and lab values.
+    
+    Combines ML/DL predictions with clinical staging.
+    """
+    try:
+        patient = request.patient
+        labs = request.lab_values
+        
+        # Calculate eGFR
+        egfr = calculate_egfr(
+            labs.creatinine,
+            patient.age,
+            patient.sex.lower() == "female"
+        )
+        
+        # Get staging
+        staging = gfr_calculator.calculate_stage(
+            creatinine=labs.creatinine,
+            acr=labs.acr,
+            age=patient.age,
+            is_female=patient.sex.lower() == "female"
+        )
+        
+        # Get complete assessment
+        # Use ML ensemble model for probability calculation if trained, else fallback to staging estimates
+        probability = 0.5
+        if ensemble_model and ensemble_model.is_trained:
+            from config import CKD_FEATURE_ORDER, CKD_FEATURE_DEFAULTS
+            
+            # Prepare feature dict
+            feature_dict = {}
+            for f in CKD_FEATURE_ORDER:
+                val = None
+
+                # Match CKD_FEATURE_ORDER / training schema (acr is folded into uacr)
+                if f == "sc":
+                    val = labs.creatinine
+                elif f == "age":
+                    val = patient.age
+                elif f == "bu":
+                    val = labs.blood_urea
+                elif f == "bp":
+                    val = labs.blood_pressure
+                elif f == "bgr":
+                    val = labs.blood_glucose
+                elif f == "sod":
+                    val = labs.sodium
+                elif f == "pot":
+                    val = labs.potassium
+                elif f == "hba1c":
+                    val = labs.hba1c
+                elif f == "uacr":
+                    val = labs.uacr if labs.uacr is not None else labs.acr
+                elif f == "uric_acid":
+                    val = labs.uric_acid
+                elif f == "serum_albumin":
+                    val = labs.serum_albumin
+                elif f == "bmi":
+                    val = labs.bmi
+                elif f == "bp_dia":
+                    val = labs.blood_pressure_diastolic
+                elif f == "diabetes_duration":
+                    val = labs.diabetes_duration
+                elif f == "smoking":
+                    val = labs.smoking
+                elif f == "dyslipidemia":
+                    val = labs.dyslipidemia
+                elif f == "diabetes_type":
+                    val = labs.diabetes_type
+
+                if val is None:
+                    val = CKD_FEATURE_DEFAULTS.get(f, 0)
+
+                feature_dict[f] = [val]
+            
+            # Transform and align features
+            df_features = pd.DataFrame(feature_dict)
+            df_features = feature_engineer.create_categorical_bins(df_features)
+            
+            trained_features = None
+            if ensemble_model.feature_names:
+                trained_features = ensemble_model.feature_names
+            elif (
+                getattr(ensemble_model.ml_models, "feature_names", None)
+            ):
+                trained_features = ensemble_model.ml_models.feature_names
+            if trained_features:
+                for col in trained_features:
+                    if col not in df_features.columns:
+                        df_features[col] = 0
+                df_features = df_features[trained_features]
+            
+            # Get probability
+            feature_vector = df_features.values
+            _, _, details = ensemble_model.predict_with_confidence(feature_vector)
+            probability = float(details['ensemble_proba'][0])
+            
+        else:
+            # Fallback staging-based probability
+            if staging.gfr_stage in [GFRStage.G4, GFRStage.G5]:
+                probability = 0.95
+            elif staging.gfr_stage == GFRStage.G3b:
+                probability = 0.80
+            elif staging.gfr_stage == GFRStage.G3a:
+                probability = 0.60
+            elif staging.gfr_stage == GFRStage.G2:
+                probability = 0.30
+            else:
+                probability = 0.10
+            
+            # Adjust for ACR
+            if labs.acr and labs.acr >= 300:
+                probability = min(probability + 0.2, 0.99)
+            elif labs.acr and labs.acr >= 30:
+                probability = min(probability + 0.1, 0.99)
+        
+        
+        # Get risk assessment
+        assessment = risk_assessor.complete_assessment(
+            ckd_probability=probability,
+            creatinine=labs.creatinine,
+            egfr=egfr,
+            acr=labs.acr,
+            age=patient.age,
+            is_female=patient.sex.lower() == "female"
+        )
+        
+        # AI Staging Prediction
+        ai_stage_result = None
+        if staging_model:
+            # Map input to features expected by model (creatinine, age, bp, etc)
+            # We pass all available labs + patient info
+            stage_input = {
+                "age": patient.age,
+                "pressure_level": labs.blood_pressure if labs.blood_pressure else 120, # Default BP
+                "serum_creatinine": labs.creatinine,
+                "bun": labs.blood_urea if labs.blood_urea else 40, # Default BUN
+                "serum_calcium": 9.0, # Default Ca (not in input)
+                "hemoglobin": labs.hemoglobin if labs.hemoglobin else 14.0,
+            }
+            ai_stage_result = staging_model.predict_stage(stage_input)
+
+        # Improve confidence using model agreement when ensemble is trained
+        if ensemble_model and ensemble_model.is_trained:
+            confidence_score = float(details.get('confidence', [abs(probability - 0.5) * 2])[0])
+            agreement = float(details.get('model_agreement', [1.0])[0])
+            # Blend distance-from-threshold with model agreement
+            confidence_val = round((confidence_score * 0.6) + (agreement * 0.4), 4)
+        else:
+            confidence_val = round(abs(probability - 0.5) * 2, 4)
+
+        # SHAP Explanation (if available)
+        xai_result = None
+        if xai_ready and ensemble_model and ensemble_model.is_trained:
+            try:
+                explanation = shap_explainer.explain_prediction(
+                    feature_vector, ensemble_model.feature_names, top_k=5
+                )
+                if 'error' not in explanation:
+                    xai_result = {
+                        'top_risk_factors': explanation.get('top_risk_factors', [])[:5],
+                        'top_protective_factors': explanation.get('top_protective_factors', [])[:5],
+                        'explanation_text': explanation.get('explanation_text', '')
+                    }
+            except Exception:
+                xai_result = None
+
+        return PredictionResult(
+            prediction=assessment.ckd_prediction,
+            probability=round(probability, 4),
+            confidence=confidence_val,
+            egfr=egfr,
+            gfr_stage=assessment.gfr_stage.value,
+            albuminuria_category=assessment.albuminuria_category.value if assessment.albuminuria_category else None,
+            risk_level=assessment.risk_level.value,
+            progression_risk_percent=assessment.progression_risk.risk_percentage,
+            recommendations=assessment.recommendations,
+            alerts=assessment.alerts,
+            ai_staging=ai_stage_result,
+            xai_explanation=xai_result
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/predict/image", tags=["Prediction"])
+async def predict_from_image(
+    image: UploadFile = File(..., description="Lab result image"),
+    patient_age: int = Form(50, description="Patient age"),
+    patient_sex: str = Form("male", description="Patient sex")
+):
+    """
+    Predict CKD from lab result image using OCR.
+    
+    Extracts values from the image and makes prediction.
+    """
+    if not OCR_AVAILABLE or ocr_extractor is None:
+        raise HTTPException(
+            status_code=503,
+            detail="OCR service not available. Please install easyocr or pytesseract."
+        )
+    
+    try:
+        # Save uploaded file
+        upload_path = Path("uploads") / f"temp_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
+        with open(upload_path, "wb") as f:
+            content = await image.read()
+            f.write(content)
+        
+        # Extract data
+        extraction = ocr_extractor.extract_all(str(upload_path))
+        
+        # Get patient info from extraction or use provided
+        patient_info = extraction.get('patient_info', {})
+        age = patient_info.get('age', patient_age)
+        is_female = patient_info.get('sex', patient_sex).lower() == 'female'
+        
+        # Get test values
+        test_values = extraction.get('test_values', {})
+        
+        # Extract creatinine (preferred but not required)
+        creatinine_data = test_values.get('serum_creatinine', {})
+        creatinine = creatinine_data.get('value') if isinstance(creatinine_data, dict) else None
+        
+        # Also try alternative keys
+        if not creatinine:
+            for key in ['creatinine', 'serum_cr', 'cr']:
+                val = test_values.get(key, {})
+                if isinstance(val, dict) and val.get('value'):
+                    creatinine = val['value']
+                    break
+        
+        # Get other values
+        acr_data = test_values.get('acr', {})
+        acr = acr_data.get('value') if isinstance(acr_data, dict) else None
+        
+        # Build simplified lab values for dashboard
+        lab_values = {}
+        for key, val in test_values.items():
+            if isinstance(val, dict) and val.get('value') is not None:
+                lab_values[key] = val['value']
+
+        result_data = {
+            "extracted_data": {
+                "lab_values": lab_values,
+                "raw_text_extracted": extraction.get('raw_text', '')[:800]
+            },
+            "extracted_values": test_values,
+            "patient_info": patient_info,
+            "warning": None
+        }
+
+        # If creatinine found, calculate staging
+        if creatinine:
+            egfr = calculate_egfr(creatinine, age, is_female)
+            staging = gfr_calculator.calculate_stage(
+                creatinine=creatinine,
+                acr=acr,
+                age=age,
+                is_female=is_female
+            )
+            result_data.update({
+                "egfr": egfr,
+                "gfr_stage": staging.gfr_stage.value,
+                "albuminuria_category": staging.albuminuria_category.value if staging.albuminuria_category else None,
+                "risk_level": staging.risk_level.value,
+                "description": staging.description,
+                "recommendations": staging.recommendations,
+            })
+        else:
+            result_data["warning"] = "Creatinine not found in image. Showing extracted values only."
+        
+        # Clean up
+        upload_path.unlink(missing_ok=True)
+        
+        return result_data
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
+
+
+@app.post("/report", tags=["Reports"])
+async def generate_report(
+    request: PredictionRequest,
+    background_tasks: BackgroundTasks
+):
+    """
+    Generate PDF report for patient.
+    
+    Returns download link for the generated report.
+    """
+    try:
+        patient = request.patient
+        labs = request.lab_values
+        
+        # First get prediction
+        egfr = calculate_egfr(
+            labs.creatinine,
+            patient.age,
+            patient.sex.lower() == "female"
+        )
+        
+        staging = gfr_calculator.calculate_stage(
+            creatinine=labs.creatinine,
+            acr=labs.acr,
+            age=patient.age,
+            is_female=patient.sex.lower() == "female"
+        )
+        
+        # Create PatientInfo
+        patient_info = PatientInfo(
+            name=patient.name,
+            age=patient.age,
+            sex=patient.sex,
+            date=datetime.now().strftime("%Y-%m-%d")
+        )
+        
+        # Create lab results
+        lab_results = [
+            TestResult(
+                name="Serum Creatinine",
+                value=labs.creatinine,
+                unit="mg/dL",
+                reference_range="0.5 - 1.5",
+                is_abnormal=labs.creatinine > 1.5
+            ),
+            TestResult(
+                name="eGFR",
+                value=egfr,
+                unit="mL/min/1.73m²",
+                reference_range="> 90",
+                is_abnormal=egfr < 90
+            )
+        ]
+        
+        if labs.acr:
+            lab_results.append(TestResult(
+                name="ACR",
+                value=labs.acr,
+                unit="mg/g",
+                reference_range="< 30",
+                is_abnormal=labs.acr >= 30
+            ))
+        
+        if labs.blood_urea:
+            lab_results.append(TestResult(
+                name="Blood Urea",
+                value=labs.blood_urea,
+                unit="mg/dL",
+                reference_range="10 - 50",
+                is_abnormal=labs.blood_urea > 50
+            ))
+        
+        # Calculate probability based on staging
+        probability = 0.5
+        if staging.gfr_stage in [GFRStage.G4, GFRStage.G5]:
+            probability = 0.9
+        elif staging.gfr_stage == GFRStage.G3b:
+            probability = 0.75
+        elif staging.gfr_stage == GFRStage.G3a:
+            probability = 0.5
+        
+        # Generate filename
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f"kidney_report_{timestamp}.pdf"
+        
+        # Generate report
+        filepath = report_generator.generate_report(
+            patient=patient_info,
+            prediction=staging.gfr_stage not in [GFRStage.G1, GFRStage.G2],
+            probability=probability,
+            risk_level=staging.risk_level.value,
+            gfr_stage=staging.gfr_stage.value,
+            egfr=egfr,
+            alb_category=staging.albuminuria_category.value if staging.albuminuria_category else None,
+            acr=labs.acr,
+            lab_results=lab_results,
+            recommendations=staging.recommendations,
+            alerts=[],
+            filename=filename
+        )
+        
+        return {
+            "message": "Report generated successfully",
+            "filename": filename,
+            "download_url": f"/report/download/{filename}"
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/report/download/{filename}", tags=["Reports"])
+async def download_report(filename: str):
+    """Download generated PDF report (only files inside generated_reports/)."""
+    if ".." in filename or "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    base = Path("generated_reports").resolve()
+    filepath = (base / filename).resolve()
+    try:
+        filepath.relative_to(base)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Invalid path")
+
+    if not filepath.exists():
+        raise HTTPException(status_code=404, detail="Report not found")
+    if not filepath.is_file():
+        raise HTTPException(status_code=400, detail="Not a file")
+
+    return FileResponse(
+        path=str(filepath),
+        filename=filepath.name,
+        media_type="application/pdf",
+    )
+
+
+# =============================================================================
+# RAG / Chat Endpoints
+# =============================================================================
+
+class ChatRequest(BaseModel):
+    """Request body for chat endpoint."""
+    question: str = Field(..., min_length=3, description="Question about kidney disease")
+    patient_context: Optional[Dict[str, Any]] = Field(None, description="Optional patient context")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "question": "What does eGFR 28 mean?",
+                "patient_context": {
+                    "egfr": 28,
+                    "gfr_stage": "G4"
+                }
+            }
+        }
+
+
+class ExplainRequest(BaseModel):
+    """Request for result explanation."""
+    egfr: float
+    gfr_stage: str
+    acr: Optional[float] = None
+    risk_level: Optional[str] = None
+
+
+@app.post("/chat", tags=["Chat/RAG"])
+async def chat(request: ChatRequest):
+    """
+    Ask a question about kidney disease.
+    
+    Uses RAG (Retrieval-Augmented Generation) with medical knowledge base
+    and Google Gemini for intelligent responses.
+    
+    اسأل سؤال عن أمراض الكلى واحصل على إجابة ذكية من قاعدة المعرفة الطبية.
+    """
+    global rag_engine
+    
+    if not RAG_AVAILABLE or rag_engine is None:
+        return {
+            "answer": "عذراً دكتور، نظام الذكاء الاصطناعي للمحادثة (RAG) غير متصل حالياً. يرجى التأكد من إضافة مفتاح `GEMINI_API_KEY` في ملف `.env` وتثبيت المكتبات المطلوبة ليعمل النظام بشكل كامل.",
+            "sources": [],
+            "disclaimer": "النظام في وضع عدم الاتصال (Offline Mode)."
+        }
+    
+    try:
+        result = rag_engine.ask(
+            question=request.question,
+            patient_context=request.patient_context,
+            include_sources=True
+        )
+        
+        if result.get("error"):
+             return {
+                "answer": f"عذراً، حدث خطأ أثناء الاتصال بنموذج اللغة: {result.get('answer')}",
+                "sources": [],
+                "disclaimer": ""
+            }
+        
+        return {
+            "answer": result["answer"],
+            "sources": result["sources"],
+            "disclaimer": "هذه المعلومات للأغراض التعليمية فقط. يرجى استشارة طبيب للتشخيص والعلاج."
+        }
+        
+    except Exception as e:
+        return {
+            "answer": f"عذراً، حدث خطأ غير متوقع: {str(e)}",
+            "sources": [],
+            "disclaimer": ""
+        }
+
+
+@app.post("/explain", tags=["Chat/RAG"])
+async def explain_results(request: ExplainRequest):
+    """
+    Get AI explanation for kidney test results.
+    
+    احصل على شرح مفصل لنتائج تحاليل الكلى بلغة بسيطة.
+    """
+    global rag_engine
+    
+    if not RAG_AVAILABLE or rag_engine is None:
+        # Provide basic explanation without RAG
+        explanations = {
+            "G1": "وظائف الكلى طبيعية. لا يوجد ما يدعو للقلق.",
+            "G2": "انخفاض طفيف في وظائف الكلى. المتابعة الدورية مطلوبة.",
+            "G3a": "انخفاض متوسط. يجب مراجعة طبيب الكلى.",
+            "G3b": "انخفاض ملحوظ. المتابعة كل 3 أشهر مطلوبة.",
+            "G4": "انخفاض شديد. يحتاج متابعة مكثفة مع طبيب متخصص.",
+            "G5": "فشل كلوي. يحتاج غسيل كلى أو زراعة."
+        }
+        
+        return {
+            "explanation": explanations.get(request.gfr_stage, "Unknown stage"),
+            "egfr": request.egfr,
+            "stage": request.gfr_stage,
+            "source": "Basic Rules (RAG not available)"
+        }
+    
+    try:
+        explanation = rag_engine.explain_result(
+            egfr=request.egfr,
+            gfr_stage=request.gfr_stage,
+            acr=request.acr,
+            risk_level=request.risk_level
+        )
+        
+        return {
+            "explanation": explanation,
+            "egfr": request.egfr,
+            "stage": request.gfr_stage,
+            "source": "AI-Generated with Medical Knowledge Base"
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Explanation error: {str(e)}")
+
+
+@app.get("/chat/status", tags=["Chat/RAG"])
+async def chat_status():
+    """Check RAG/Chat service status."""
+    return {
+        "rag_available": RAG_AVAILABLE,
+        "rag_initialized": rag_engine is not None,
+        "gemini_configured": rag_engine.model is not None if rag_engine else False,
+        "knowledge_base_loaded": rag_engine.knowledge_base.collection.count() > 0 if rag_engine else False,
+        "message": "Set GEMINI_API_KEY environment variable to enable full RAG functionality"
+    }
+
+
+# =============================================================================
+# PDF Report Generation Endpoint
+# =============================================================================
+
+class ReportRequest(BaseModel):
+    """Request body for generating a PDF report."""
+    patient_name: str = Field("Patient", description="Patient name")
+    patient_age: int = Field(50, description="Patient age")
+    patient_sex: str = Field("male", description="Patient sex")
+    prediction: bool = Field(..., description="CKD prediction result")
+    probability: float = Field(..., description="Prediction probability")
+    risk_level: str = Field(..., description="Risk level string")
+    gfr_stage: str = Field(..., description="GFR Stage (G1-G5)")
+    egfr: float = Field(..., description="eGFR value")
+    albuminuria_category: Optional[str] = Field(None, description="Albuminuria category")
+    acr: Optional[float] = Field(None, description="ACR value")
+    creatinine: Optional[float] = Field(None, description="Serum creatinine")
+    recommendations: List[str] = Field(default_factory=list, description="Recommendations list")
+    alerts: List[str] = Field(default_factory=list, description="Alerts list")
+
+
+@app.post("/report/generate", tags=["Reports"])
+async def generate_pdf_report(request: ReportRequest):
+    """
+    Generate a professional PDF report from prediction results.
+
+    Returns the PDF file as a downloadable attachment.
+    """
+    try:
+        patient = PatientInfo(
+            name=request.patient_name,
+            age=request.patient_age,
+            sex=request.patient_sex,
+            date=datetime.now().strftime("%Y-%m-%d"),
+            lab_no="",
+            doctor_name=""
+        )
+
+        # Build lab results if creatinine is available
+        lab_results = []
+        if request.creatinine:
+            lab_results.append(TestResult(
+                name="Serum Creatinine", value=request.creatinine,
+                unit="mg/dL", reference_range="0.5 - 1.5",
+                is_abnormal=request.creatinine > 1.5
+            ))
+        lab_results.append(TestResult(
+            name="eGFR", value=round(request.egfr, 1),
+            unit="mL/min/1.73m\u00b2", reference_range=">90",
+            is_abnormal=request.egfr < 60
+        ))
+        if request.acr:
+            lab_results.append(TestResult(
+                name="ACR", value=request.acr,
+                unit="mg/g", reference_range="<30",
+                is_abnormal=request.acr >= 30
+            ))
+
+        filepath = report_generator.generate_report(
+            patient=patient,
+            prediction=request.prediction,
+            probability=request.probability,
+            risk_level=request.risk_level,
+            gfr_stage=request.gfr_stage,
+            egfr=request.egfr,
+            alb_category=request.albuminuria_category,
+            acr=request.acr,
+            lab_results=lab_results if lab_results else None,
+            recommendations=request.recommendations if request.recommendations else None,
+            alerts=request.alerts if request.alerts else None
+        )
+
+        return FileResponse(
+            path=filepath,
+            filename=Path(filepath).name,
+            media_type="application/pdf"
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Report generation failed: {str(e)}")
+
+
+# =============================================================================
+# Longitudinal Monitoring Endpoints
+# =============================================================================
+
+
+class MeasurementRequest(BaseModel):
+    """Request body for adding a patient measurement."""
+    patient_id: str = Field(..., description="Unique patient identifier")
+    date: str = Field(..., description="Measurement date (YYYY-MM-DD)")
+    egfr: float = Field(..., description="eGFR value")
+    creatinine: Optional[float] = Field(None, description="Serum creatinine mg/dL")
+    uacr: Optional[float] = Field(None, description="UACR mg/g")
+    hba1c: Optional[float] = Field(None, description="HbA1c percentage")
+    bp_systolic: Optional[int] = Field(None, description="Systolic blood pressure")
+    hemoglobin: Optional[float] = Field(None, description="Hemoglobin g/dL")
+    potassium: Optional[float] = Field(None, description="Potassium mmol/L")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "patient_id": "patient_001",
+                "date": "2026-03-18",
+                "egfr": 45.0,
+                "creatinine": 2.5,
+                "uacr": 180.0,
+                "hba1c": 8.5,
+                "bp_systolic": 160
+            }
+        }
+
+
+@app.post("/monitor/add", tags=["Monitoring"])
+async def add_measurement(request: MeasurementRequest):
+    """
+    Record a patient measurement for longitudinal tracking.
+
+    Used by Smart Alerts to detect anomalies and predict future risk.
+    """
+    try:
+        result = longitudinal_monitor.add_measurement(
+            patient_id=request.patient_id,
+            date=request.date,
+            egfr=request.egfr,
+            creatinine=request.creatinine,
+            uacr=request.uacr,
+            hba1c=request.hba1c
+        )
+        return {
+            "status": "recorded",
+            "patient_id": request.patient_id,
+            "date": request.date,
+            "total_measurements": result.get("total_measurements", 1) if isinstance(result, dict) else 1
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to record measurement: {str(e)}")
+
+
+# =============================================================================
+# Smart Alerts Endpoints
+# =============================================================================
+
+
+class SymptomRequest(BaseModel):
+    """Request body for symptom analysis."""
+    text: str = Field(..., min_length=3, description="Patient symptom description (Arabic or English)")
+    patient_id: Optional[str] = Field(None, description="Patient ID for correlation with lab data")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "text": "حاسس بتورم في رجلي ودوخة وقلة في البول",
+                "patient_id": "patient_001"
+            }
+        }
+
+
+class AlertAnalyzeRequest(BaseModel):
+    """Request body for alert analysis."""
+    patient_id: str = Field(..., description="Patient ID")
+    include_rule_based: bool = Field(default=True, description="Include rule-based alerts")
+
+
+@app.post("/alerts/analyze", tags=["Smart Alerts"])
+async def analyze_patient_alerts(request: AlertAnalyzeRequest):
+    """
+    Analyze patient data for anomalies and predictive alerts.
+    
+    تحليل بيانات المريض للكشف عن التغيرات غير الطبيعية والتنبؤ بالمخاطر.
+    
+    Combines:
+    1. Anomaly Detection (Isolation Forest)
+    2. Predictive Analytics (Multi-biomarker trends)
+    3. Rule-based alerts (existing)
+    """
+    if smart_alert_engine is None:
+        raise HTTPException(status_code=503, detail="Smart Alert Engine not initialized")
+    
+    try:
+        # Get anomaly detection result
+        anomaly = smart_alert_engine.detect_anomalies(request.patient_id)
+        
+        # Get predictive analytics
+        prediction = smart_alert_engine.predict_future_risk(request.patient_id)
+        
+        # Get rule-based alerts if requested
+        rule_alerts = []
+        if request.include_rule_based:
+            data = longitudinal_monitor.get_patient_history(request.patient_id)
+            if data:
+                latest = data[-1]
+                egfr = latest.get('egfr', 90)
+                creatinine = latest.get('creatinine', 1.0)
+                uacr = latest.get('uacr')
+                rule_alerts = risk_assessor.generate_alerts(
+                    egfr=egfr, acr=uacr, creatinine=creatinine,
+                    other_values={
+                        'hba1c': latest.get('hba1c', 0),
+                        'potassium': latest.get('potassium', 0),
+                        'hemoglobin': latest.get('hemoglobin', 15),
+                        'bp_systolic': latest.get('bp_systolic', 120),
+                    }
+                )
+        
+        # Generate combined smart alerts
+        alerts = smart_alert_engine.generate_smart_alerts(
+            patient_id=request.patient_id,
+            include_rule_based=request.include_rule_based,
+            rule_based_alerts=rule_alerts
+        )
+        
+        return {
+            "patient_id": request.patient_id,
+            "total_alerts": len(alerts),
+            "alerts": smart_alert_engine.alerts_to_dict(alerts),
+            "anomaly_detection": {
+                "is_anomaly": anomaly.is_anomaly,
+                "severity": anomaly.severity,
+                "anomaly_score": anomaly.anomaly_score,
+                "anomalous_features": anomaly.anomalous_features
+            },
+            "predictive_analytics": {
+                "risk_score": prediction.overall_risk_score,
+                "risk_classification": prediction.risk_classification,
+                "timeline": prediction.predicted_timeline,
+                "biomarker_trends": prediction.biomarker_trends
+            }
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Alert analysis failed: {str(e)}")
+
+
+@app.post("/alerts/symptoms", tags=["Smart Alerts"])
+async def analyze_symptoms(request: SymptomRequest):
+    """
+    Analyze patient symptoms using NLP.
+    
+    تحليل شكوى المريض باللغة العربية أو الإنجليزية واقتراح التشخيص والتوصيات.
+    
+    Uses Gemini AI (if available) or keyword-based matching.
+    """
+    if smart_alert_engine is None:
+        raise HTTPException(status_code=503, detail="Smart Alert Engine not initialized")
+    
+    try:
+        result = smart_alert_engine.analyze_symptoms(
+            text=request.text,
+            patient_id=request.patient_id
+        )
+        
+        return {
+            "urgency": result.urgency,
+            "matched_conditions": result.matched_conditions,
+            "recommendations": result.recommendations,
+            "correlation_with_labs": result.correlation_with_labs,
+            "ai_analysis": result.raw_ai_response
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Symptom analysis failed: {str(e)}")
+
+
+@app.get("/alerts/patient/{patient_id}", tags=["Smart Alerts"])
+async def get_patient_alerts(patient_id: str):
+    """
+    Get all smart alerts for a monitored patient.
+    
+    عرض جميع التنبيهات الذكية لمريض معين مع ترتيبها حسب الأولوية.
+    """
+    if smart_alert_engine is None:
+        raise HTTPException(status_code=503, detail="Smart Alert Engine not initialized")
+    
+    try:
+        # Check if patient exists
+        data = longitudinal_monitor.get_patient_history(patient_id)
+        if not data:
+            return {
+                "patient_id": patient_id,
+                "total_alerts": 0,
+                "alerts": [],
+                "message": "لا توجد بيانات مسجلة لهذا المريض"
+            }
+        
+        # Get rule-based alerts from latest data
+        latest = data[-1]
+        rule_alerts = risk_assessor.generate_alerts(
+            egfr=latest.get('egfr', 90),
+            acr=latest.get('uacr'),
+            creatinine=latest.get('creatinine', 1.0)
+        )
+        
+        # Generate all alerts
+        alerts = smart_alert_engine.generate_smart_alerts(
+            patient_id=patient_id,
+            rule_based_alerts=rule_alerts
+        )
+        
+        return {
+            "patient_id": patient_id,
+            "total_measurements": len(data),
+            "latest_measurement": data[-1],
+            "total_alerts": len(alerts),
+            "alerts": smart_alert_engine.alerts_to_dict(alerts)
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get alerts: {str(e)}")
+
+
+# =============================================================================
+# Run Server
+# =============================================================================
+
+if __name__ == "__main__":
+    uvicorn.run(
+        "api:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=True
+    )
