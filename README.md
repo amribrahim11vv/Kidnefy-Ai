@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="https://img.icons8.com/external-flaticons-flat-flat-icons/64/external-kidneys-anatomy-flaticons-flat-flat-icons-3.png" alt="Kidnefy-AI Logo">
+  <img src="https://cdn-icons-png.flaticon.com/512/8157/8157053.png" alt="Kidnefy-AI Logo">
   <h1>Kidnefy-AI: Advanced Kidney Disease Prediction System</h1>
   <p><strong>A comprehensive AI-powered medical platform for detecting, staging, and monitoring Chronic Kidney Disease (CKD) and Diabetic Nephropathy.</strong></p>
 
