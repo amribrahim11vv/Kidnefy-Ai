@@ -170,6 +170,48 @@ You should see all AI engines initialize successfully in your terminal.
 
 ---
 
+## 📁 Project Structure
+
+```text
+kidney_disease_prediction/
+|-- api.py                    <- FastAPI Backend (main entry point)
+|-- main.py                   <- CLI for training & prediction
+|-- train_diabetes.py         <- Diabetes training pipeline
+|-- config.py                 <- Central configuration
+|-- streamlit_app.py          <- Interactive Streamlit Demo
+|-- dashboard.html            <- HTML Frontend Prototype
+|-- requirements.txt          <- All dependencies (pinned)
+|-- .env.example              <- Environment variable template
+|-- Dockerfile                <- Docker image definition
+|-- docker-compose.yml        <- One-command deployment
+|-- setup.bat                 <- Windows one-click setup
+|-- run_server.bat            <- Windows one-click server start
+|-- Kidney_Disease_API.postman_collection.json  <- Postman testing
+|
+|-- src/                      <- All AI source modules
+|   |-- models/               ML, DL, Ensemble, Staging wrappers
+|   |-- preprocessing/        Data loading & feature engineering
+|   |-- staging/              eGFR (CKD-EPI 2021) + KDIGO risk
+|   |-- monitoring/           Smart Alerts + Longitudinal Monitor
+|   |-- ocr/                  Image processing + text extraction
+|   |-- rag/                  Gemini RAG + ChromaDB knowledge base
+|   |-- reports/              HTML report generator
+|   +-- explainability/       SHAP-based XAI
+|
+|-- models/                   <- Pre-trained models (ready to use)
+|   |-- staging/              XGBoost staging model + scaler
+|   +-- diabetes/             RF, SVM, XGBoost diabetes models
+|
+|-- data/raw/                 <- Datasets (CKD + Diabetes)
+|-- tests/                    <- All test & verification scripts
+|-- scripts/                  <- Utility scripts (data analysis, etc.)
+|-- docs/                     <- Project documentation (AR + EN)
+|-- sample_images/            <- Sample lab reports for OCR testing
++-- notebooks/                <- Jupyter notebooks
+```
+
+---
+
 ## 📡 API Endpoints Reference
 
 The FastAPI backend provides a rich, documented API. Once the server is running, visit **`http://localhost:8000/docs`** for the interactive Swagger UI.
