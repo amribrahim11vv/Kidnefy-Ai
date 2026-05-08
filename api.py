@@ -110,6 +110,46 @@ class PredictionRequest(BaseModel):
     lab_values: LabValues
 
 
+class WhatIfPatientData(BaseModel):
+    """Single scenario for the What-If Simulator.
+    
+    Mirrors the lightweight payload the dashboard sends:
+    {age, sex, sc (creatinine), bp, al (albumin level 0-4), dm ("yes"/"no")}
+    """
+    age: int = Field(default=60, ge=1, le=120, description="Patient age")
+    sex: str = Field(default="male", description="Patient sex (male/female)")
+    sc: float = Field(..., gt=0, description="Serum creatinine in mg/dL")
+    bp: int = Field(default=120, ge=0, description="Systolic blood pressure")
+    al: int = Field(default=0, ge=0, le=5, description="Albumin level (0-5 scale)")
+    dm: str = Field(default="no", description="Diabetes mellitus (yes/no)")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "age": 60, "sex": "male",
+                "sc": 2.5, "bp": 160, "al": 2, "dm": "no"
+            }
+        }
+
+
+class WhatIfRequest(BaseModel):
+    """Request body for the What-If Treatment Simulator.
+    
+    Compares a *baseline* clinical state against a hypothetical
+    *modified* state to quantify the impact of treatment changes.
+    """
+    baseline: WhatIfPatientData
+    modified: WhatIfPatientData
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "baseline": {"age": 60, "sex": "male", "sc": 2.5, "bp": 160, "al": 2, "dm": "no"},
+                "modified": {"age": 60, "sex": "male", "sc": 1.8, "bp": 125, "al": 0, "dm": "no"}
+            }
+        }
+
+
 class StageRequest(BaseModel):
     """Request body for staging endpoint."""
     creatinine: float = Field(..., gt=0)
@@ -588,6 +628,153 @@ async def predict(request: PredictionRequest):
             xai_explanation=xai_result
         )
         
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# What-If Treatment Simulator
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _whatif_evaluate_scenario(scenario: WhatIfPatientData) -> Dict[str, Any]:
+    """Evaluate a single What-If scenario.
+    
+    Returns eGFR, GFR stage, CKD probability, risk level,
+    and progression_risk_percent for one set of clinical values.
+    """
+    is_female = scenario.sex.lower() == "female"
+
+    # 1. eGFR via CKD-EPI
+    egfr = gfr_calculator.calculate_egfr_ckdepi(
+        scenario.sc, scenario.age, is_female
+    )
+
+    # 2. Map albumin level (0-5) → approximate ACR for staging
+    al_to_acr = {0: 10, 1: 20, 2: 80, 3: 200, 4: 500, 5: 1000}
+    acr_estimate = al_to_acr.get(scenario.al, 10)
+
+    # 3. KDIGO staging
+    staging = gfr_calculator.calculate_stage(
+        creatinine=scenario.sc,
+        acr=acr_estimate,
+        age=scenario.age,
+        is_female=is_female
+    )
+
+    # 4. ML probability (if ensemble loaded) or staging-based fallback
+    probability = 0.5
+    if ensemble_model and ensemble_model.is_trained:
+        from config import CKD_FEATURE_ORDER, CKD_FEATURE_DEFAULTS
+        feature_dict = {}
+        dm_val = 1 if scenario.dm.lower() in ("yes", "1", "true") else 0
+        for f in CKD_FEATURE_ORDER:
+            if f == "age":
+                val = scenario.age
+            elif f == "bp":
+                val = scenario.bp
+            elif f == "dm":
+                val = dm_val
+            elif f == "htn":
+                val = 1 if scenario.bp >= 140 else 0
+            elif f == "su":
+                val = scenario.al  # approximate sugar from albumin
+            else:
+                val = CKD_FEATURE_DEFAULTS.get(f, 0)
+            feature_dict[f] = [val]
+
+        df_features = pd.DataFrame(feature_dict)
+        df_features = feature_engineer.create_categorical_bins(df_features)
+
+        trained_features = None
+        if ensemble_model.feature_names:
+            trained_features = ensemble_model.feature_names
+        elif getattr(ensemble_model.ml_models, "feature_names", None):
+            trained_features = ensemble_model.ml_models.feature_names
+        if trained_features:
+            for col in trained_features:
+                if col not in df_features.columns:
+                    df_features[col] = 0
+            df_features = df_features[trained_features]
+
+        feature_vector = df_features.values
+        _, _, details = ensemble_model.predict_with_confidence(feature_vector)
+        probability = float(details['ensemble_proba'][0])
+    else:
+        # Staging-based fallback (same logic as /predict)
+        stage_prob = {
+            GFRStage.G1: 0.10, GFRStage.G2: 0.30,
+            GFRStage.G3a: 0.60, GFRStage.G3b: 0.80,
+            GFRStage.G4: 0.95, GFRStage.G5: 0.95,
+        }
+        probability = stage_prob.get(staging.gfr_stage, 0.5)
+        # Adjust for ACR
+        if acr_estimate >= 300:
+            probability = min(probability + 0.2, 0.99)
+        elif acr_estimate >= 30:
+            probability = min(probability + 0.1, 0.99)
+
+    # 5. Full risk assessment
+    assessment = risk_assessor.complete_assessment(
+        ckd_probability=probability,
+        creatinine=scenario.sc,
+        egfr=egfr,
+        acr=acr_estimate,
+        age=scenario.age,
+        is_female=is_female
+    )
+
+    return {
+        "egfr": round(egfr, 2),
+        "gfr_stage": assessment.gfr_stage.value,
+        "probability": round(probability, 4),
+        "risk_level": assessment.risk_level.value,
+        "progression_risk_percent": assessment.progression_risk.risk_percentage,
+        "recommendations": assessment.recommendations,
+        "alerts": assessment.alerts,
+    }
+
+
+@app.post("/predict/whatif", tags=["Prediction"])
+async def predict_whatif(request: WhatIfRequest):
+    """
+    What-If Treatment Simulator.
+
+    Compare two clinical scenarios (baseline vs. modified) to quantify
+    the impact of treatment changes on kidney disease progression risk.
+
+    The response includes full results for both states plus computed deltas
+    so the frontend can visualise improvements (or deterioration) instantly.
+    """
+    try:
+        baseline = _whatif_evaluate_scenario(request.baseline)
+        modified = _whatif_evaluate_scenario(request.modified)
+
+        # Compute deltas
+        delta_prob  = round(modified["probability"] - baseline["probability"], 4)
+        delta_egfr  = round(modified["egfr"] - baseline["egfr"], 2)
+        delta_risk  = round(
+            modified["progression_risk_percent"] - baseline["progression_risk_percent"], 2
+        )
+
+        # Stage comparison (e.g. "G4 → G3a")
+        stage_change = (
+            f"{baseline['gfr_stage']} → {modified['gfr_stage']}"
+            if baseline["gfr_stage"] != modified["gfr_stage"]
+            else "No change"
+        )
+
+        return {
+            "baseline": baseline,
+            "modified": modified,
+            "deltas": {
+                "probability": delta_prob,
+                "egfr": delta_egfr,
+                "progression_risk": delta_risk,
+                "stage_change": stage_change,
+                "risk_improved": delta_prob < 0,
+            },
+        }
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
