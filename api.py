@@ -49,6 +49,14 @@ except ImportError:
     RAG_AVAILABLE = False
     print("Warning: RAG dependencies not installed. Chat feature will be disabled.")
 
+# Try to import Smart Diet Planner
+try:
+    from src.rag.diet_planner import SmartDietPlanner
+    DIET_PLANNER_AVAILABLE = True
+except ImportError:
+    DIET_PLANNER_AVAILABLE = False
+    print("Warning: Diet Planner could not be imported.")
+
 
 # =============================================================================
 # Pydantic Models (Request/Response Schemas)
@@ -163,6 +171,31 @@ class ChatRequest(BaseModel):
         }
 
 
+class DietRequest(BaseModel):
+    """Request body for the Smart Diet Planner endpoint."""
+    age: int = Field(..., ge=1, le=120, description="Patient age in years")
+    weight: float = Field(..., gt=0, description="Patient weight in kg")
+    egfr: Optional[float] = Field(None, ge=0, description="eGFR value (will auto-calculate stage)")
+    stage: Optional[str] = Field(None, description="CKD stage (G1–G5) if eGFR not available")
+    potassium: Optional[float] = Field(4.5, description="Serum potassium in mEq/L (normal: 3.5-5.0)")
+    sodium: Optional[float] = Field(140.0, description="Serum sodium in mEq/L (normal: 135-145)")
+    diabetes: Optional[str] = Field("no", description="Diabetes status (yes/no)")
+    hypertension: Optional[str] = Field("no", description="Hypertension status (yes/no)")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "age": 58,
+                "weight": 80,
+                "egfr": 28,
+                "potassium": 5.8,
+                "sodium": 145,
+                "diabetes": "yes",
+                "hypertension": "yes"
+            }
+        }
+
+
 class StageRequest(BaseModel):
     """Request body for staging endpoint."""
     creatinine: float = Field(..., gt=0)
@@ -236,6 +269,7 @@ ensemble_model = None  # Will be loaded on startup
 staging_model = None   # AI Staging Model
 ocr_extractor = None
 rag_engine = None  # RAG for medical Q&A
+diet_planner = None  # Smart Diet Planner
 longitudinal_monitor = LongitudinalMonitor()
 smart_alert_engine = None  # Will be initialized on startup
 feature_engineer = FeatureEngineer()
@@ -250,7 +284,7 @@ xai_ready = False
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize models on startup, clean up on shutdown."""
-    global ensemble_model, ocr_extractor, rag_engine, staging_model, xai_ready, smart_alert_engine
+    global ensemble_model, ocr_extractor, rag_engine, staging_model, xai_ready, smart_alert_engine, diet_planner
 
     print(" Starting Kidney Disease Prediction API...")
 
@@ -321,6 +355,17 @@ async def lifespan(app: FastAPI):
         gemini_rag=rag_engine
     )
     print("✅ Smart Alert Engine initialized")
+
+    # Initialize Smart Diet Planner
+    if DIET_PLANNER_AVAILABLE:
+        try:
+            diet_planner = SmartDietPlanner()
+            if diet_planner.is_active:
+                print("✅ Smart Diet Planner initialized")
+            else:
+                print("⚠️ Smart Diet Planner: GEMINI_API_KEY missing, feature disabled.")
+        except Exception as e:
+            print(f"⚠️ Diet Planner initialization failed: {e}")
 
     print("✅ API ready!")
     yield
@@ -1520,6 +1565,60 @@ async def chat_with_medical_assistant(request: ChatRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Chatbot failed: {str(e)}")
+
+
+# =============================================================================
+# Diet Planner Endpoint
+# =============================================================================
+
+@app.post("/diet/plan", tags=["AI Features"])
+async def generate_diet_plan(request: DietRequest):
+    """
+    🥗 Smart AI Diet Planner
+
+    Generates a personalized, medically accurate 7-day meal plan for a kidney
+    disease patient based on their eGFR stage and lab values (Potassium, Sodium).
+
+    Rules are based on KDIGO 2012 clinical practice guidelines for nutritional
+    management of CKD.
+    """
+    if not DIET_PLANNER_AVAILABLE or diet_planner is None or not diet_planner.is_active:
+        raise HTTPException(
+            status_code=503,
+            detail="Smart Diet Planner is unavailable. Ensure GEMINI_API_KEY is configured in .env"
+        )
+
+    # Auto-derive stage label from eGFR if not provided
+    stage_label = request.stage
+    if not stage_label and request.egfr is not None:
+        try:
+            gfr_stage_obj = gfr_calculator.get_gfr_stage(request.egfr)
+            stage_label = gfr_stage_obj.value
+        except Exception:
+            stage_label = "Unknown"
+
+    patient_data = {
+        "age":         request.age,
+        "weight":      request.weight,
+        "egfr":        request.egfr,
+        "stage":       stage_label or "Unknown",
+        "potassium":   request.potassium,
+        "sodium":      request.sodium,
+        "diabetes":    request.diabetes,
+        "hypertension":request.hypertension,
+    }
+
+    try:
+        plan_markdown = diet_planner.generate_diet_plan(patient_data)
+        return {
+            "status":       "success",
+            "stage":        stage_label,
+            "egfr":         request.egfr,
+            "diet_plan":    plan_markdown,
+            "disclaimer":   "تنبيه: هذا النظام الغذائي مقترح من الذكاء الاصطناعي بناءً على إرشادات KDIGO الطبية. يجب مراجعة طبيب التغذية المختص قبل التطبيق."
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Diet plan generation failed: {str(e)}")
 
 
 # =============================================================================
