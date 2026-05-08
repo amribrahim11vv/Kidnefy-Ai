@@ -22,6 +22,7 @@ Kidnefy-AI is not just a prediction model; it is a full **Clinical Decision Supp
 5. ⚖️ **What-If Treatment Simulator**: Allows doctors to simulate treatment plans (e.g., "What if we reduce blood pressure to 120?") and instantly calculates the reduction in risk probability and clinical staging.
 6. 🚨 **Smart Alerts & Monitoring**: Tracks patient history longitudinally. Uses **Isolation Forest (Machine Learning)** for personalized anomaly detection and predictive risk scoring, triggering alerts for "Fast Progressors".
 7. 📄 **Bilingual HTML Reports**: Automatically generates visually stunning, print-ready medical reports in both Arabic and English.
+8. 🥗 **Smart Diet Planner**: Generates a personalized, medically accurate **7-day meal plan** for CKD patients. Enforces strict KDIGO nutritional rules (Protein, Potassium, Sodium limits) based on the patient's stage and lab results. Powered by Google Gemini AI.
 
 ---
 

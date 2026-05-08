@@ -19,6 +19,7 @@ graph TD
         Prediction["Prediction Ensemble (XGBoost + DL)"]
         OCR["OCR Engine (EasyOCR)"]
         RAG["Medical Chatbot (Gemini RAG)"]
+        Diet["Smart Diet Planner (Gemini AI)"]
         Monitoring["Smart Alerts & Monitoring"]
         Reports["Report Generator (HTML/PDF)"]
     end
@@ -30,6 +31,7 @@ graph TD
     API -->|"/predict & /predict/whatif"| Prediction
     API -->|"/predict/image"| OCR
     API -->|"/chat"| RAG
+    API -->|"/diet/plan"| Diet
     API -->|"/alerts/*"| Monitoring
     API -->|"/report"| Reports
     
