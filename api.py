@@ -150,6 +150,19 @@ class WhatIfRequest(BaseModel):
         }
 
 
+class ChatRequest(BaseModel):
+    """Request body for the medical chatbot endpoint."""
+    question: str = Field(..., description="The user's question")
+    patient_id: Optional[str] = Field(None, description="Optional patient ID to include clinical context")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "question": "ما هي الأطعمة الممنوعة لمريض الكلى في المرحلة الثالثة؟"
+            }
+        }
+
+
 class StageRequest(BaseModel):
     """Request body for staging endpoint."""
     creatinine: float = Field(..., gt=0)
@@ -1455,6 +1468,58 @@ async def get_patient_alerts(patient_id: str):
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get alerts: {str(e)}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Chatbot (RAG) Endpoint
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.post("/chat", tags=["AI Assistant"])
+async def chat_with_medical_assistant(request: ChatRequest):
+    """
+    Medical Assistant Chatbot.
+    
+    Uses Gemini LLM + RAG (Retrieval-Augmented Generation) to answer medical questions
+    about kidney disease based on KDIGO guidelines and provided patient context.
+    """
+    if not RAG_AVAILABLE or rag_engine is None:
+        raise HTTPException(
+            status_code=503, 
+            detail="Chatbot service is currently unavailable. Ensure GEMINI_API_KEY is configured."
+        )
+    
+    try:
+        patient_context = None
+        # If a patient ID is provided, try to fetch their latest lab context
+        if request.patient_id and longitudinal_monitor:
+            history = longitudinal_monitor.get_patient_history(request.patient_id)
+            if history:
+                latest = history[-1]
+                patient_context = {
+                    "egfr": latest.get("egfr"),
+                    "acr": latest.get("uacr"),
+                    "gfr_stage": gfr_calculator.get_gfr_stage(latest.get("egfr", 90)).value if latest.get("egfr") else None
+                }
+
+        # Query the RAG engine
+        response = rag_engine.ask(
+            question=request.question,
+            patient_context=patient_context,
+            include_sources=True
+        )
+        
+        if response.get("error"):
+            raise HTTPException(status_code=500, detail=response.get("answer"))
+            
+        # Add a medical disclaimer to the response
+        response["disclaimer"] = "تنبيه: هذه إجابة من الذكاء الاصطناعي بناءً على إرشادات طبية، وليست بديلاً عن استشارة الطبيب المختص."
+            
+        return response
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Chatbot failed: {str(e)}")
 
 
 # =============================================================================
