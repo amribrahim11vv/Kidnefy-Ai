@@ -228,6 +228,7 @@ The FastAPI backend provides a rich, documented API. Once the server is running,
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `POST` | `/chat` | **[NEW]** RAG Medical Chatbot (Ask questions based on guidelines) |
+| `POST` | `/diet/plan` | **[NEW]** 🥗 Generate a 7-day personalized kidney-safe meal plan |
 | `POST` | `/explain` | AI explanation of prediction results (SHAP) |
 | `POST` | `/alerts/symptoms` | NLP symptom analysis (Gemini integration) |
 | `GET` | `/alerts/patient/{id}` | Get patient longitudinal anomalies & fast progressor status |
