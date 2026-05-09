@@ -23,6 +23,7 @@ Kidnefy-AI is not just a prediction model; it is a full **Clinical Decision Supp
 6. 🚨 **Smart Alerts & Monitoring**: Tracks patient history longitudinally. Uses **Isolation Forest (Machine Learning)** for personalized anomaly detection and predictive risk scoring, triggering alerts for "Fast Progressors".
 7. 📄 **Bilingual HTML Reports**: Automatically generates visually stunning, print-ready medical reports in both Arabic and English.
 8. 🥗 **Smart Diet Planner**: Generates a personalized, medically accurate **7-day meal plan** for CKD patients. Enforces strict KDIGO nutritional rules (Protein, Potassium, Sodium limits) based on the patient's stage and lab results. Powered by Google Gemini AI.
+9. 🔬 **CT Image Classification**: Deep Learning CNN model (MobileNetV2, 83.4% accuracy) to classify kidney CT scans into 4 categories (Normal, Cyst, Stone, Tumor). Includes automated diagnostic confidence scoring.
 
 ---
 
@@ -43,6 +44,7 @@ graph TD
         RAG["Medical Chatbot (Gemini RAG)"]
         Monitoring["Smart Alerts & Monitoring"]
         Reports["Report Generator (HTML)"]
+        CTVision["CT Image Classifier (MobileNetV2)"]
     end
     
     %% Define Relationships
@@ -54,6 +56,7 @@ graph TD
     API -->|"/chat"| RAG
     API -->|"/alerts/*"| Monitoring
     API -->|"/report"| Reports
+    API -->|"/predict/ct"| CTVision
     
     %% Cross-module communications
     Prediction --> Staging
@@ -223,6 +226,7 @@ The FastAPI backend provides a rich, documented API. Once the server is running,
 | `POST` | `/predict` | Predict CKD probability from lab values (JSON) |
 | `POST` | `/predict/whatif` | **[NEW]** Simulate treatment changes to see risk reduction |
 | `POST` | `/predict/image` | Upload a lab report image (OCR extraction) |
+| `POST` | `/predict/ct` | **[NEW]** 🔬 Classify kidney CT scan (Normal, Cyst, Stone, Tumor) |
 | `POST` | `/stage` | Calculate KDIGO staging & eGFR |
 
 ### 🤖 AI & Monitoring Features

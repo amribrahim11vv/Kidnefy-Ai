@@ -22,6 +22,7 @@ graph TD
         Diet["Smart Diet Planner (Gemini AI)"]
         Monitoring["Smart Alerts & Monitoring"]
         Reports["Report Generator (HTML/PDF)"]
+        CTVision["CT Image Classifier (MobileNetV2)"]
     end
     
     %% Define Relationships
@@ -34,6 +35,7 @@ graph TD
     API -->|"/diet/plan"| Diet
     API -->|"/alerts/*"| Monitoring
     API -->|"/report"| Reports
+    API -->|"/predict/ct"| CTVision
     
     %% Cross-module communications
     Prediction --> Staging
