@@ -26,6 +26,13 @@ generated_reports/
 uploads/
 knowledge_base/
 
+# Datasets (Do not track large images/csvs)
+data/archive*/
+data/raw/
+*.jpg
+*.png
+*.jpeg
+
 # OS
 Thumbs.db
 .DS_Store
