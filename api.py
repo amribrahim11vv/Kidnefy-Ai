@@ -57,6 +57,14 @@ except ImportError:
     DIET_PLANNER_AVAILABLE = False
     print("Warning: Diet Planner could not be imported.")
 
+# Try to import CT Kidney Image Classifier
+try:
+    from src.imaging.kidney_image_classifier import KidneyImageClassifier
+    CT_CLASSIFIER_AVAILABLE = True
+except ImportError:
+    CT_CLASSIFIER_AVAILABLE = False
+    print("Warning: CT Classifier could not be imported. Install TensorFlow to enable.")
+
 
 # =============================================================================
 # Pydantic Models (Request/Response Schemas)
@@ -275,6 +283,7 @@ smart_alert_engine = None  # Will be initialized on startup
 feature_engineer = FeatureEngineer()
 shap_explainer = SHAPExplainer()
 xai_ready = False
+ct_classifier = None  # CT Kidney Image Classifier
 
 
 # =============================================================================
@@ -284,7 +293,7 @@ xai_ready = False
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize models on startup, clean up on shutdown."""
-    global ensemble_model, ocr_extractor, rag_engine, staging_model, xai_ready, smart_alert_engine, diet_planner
+    global ensemble_model, ocr_extractor, rag_engine, staging_model, xai_ready, smart_alert_engine, diet_planner, ct_classifier
 
     print(" Starting Kidney Disease Prediction API...")
 
@@ -366,6 +375,17 @@ async def lifespan(app: FastAPI):
                 print("⚠️ Smart Diet Planner: GEMINI_API_KEY missing, feature disabled.")
         except Exception as e:
             print(f"⚠️ Diet Planner initialization failed: {e}")
+
+    # Initialize CT Kidney Image Classifier
+    if CT_CLASSIFIER_AVAILABLE:
+        try:
+            ct_classifier = KidneyImageClassifier()
+            if ct_classifier.is_ready:
+                print("✅ CT Kidney Classifier loaded successfully")
+            else:
+                print("⚠️ CT Classifier: No trained model found. Run train_ultrasound.py first.")
+        except Exception as e:
+            print(f"⚠️ CT Classifier initialization failed: {e}")
 
     print("✅ API ready!")
     yield
@@ -1619,6 +1639,79 @@ async def generate_diet_plan(request: DietRequest):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Diet plan generation failed: {str(e)}")
+
+
+# =============================================================================
+# CT Kidney Image Analysis Endpoint
+# =============================================================================
+
+@app.post(
+    "/predict/ct",
+    summary="CT Kidney Image Analysis",
+    tags=["Medical Imaging"],
+    response_description="Classification result (Normal / Cyst / Stone / Tumor) with confidence score."
+)
+async def predict_ct_kidney(
+    file: UploadFile = File(..., description="CT Scan image of the kidney (JPEG/PNG)")
+):
+    """
+    ## تحليل صور الأشعة المقطعية للكلى 🔬
+
+    يستقبل صورة أشعة مقطعية (CT Scan) للكلى ويُصنفها إلى:
+    - **Normal**: كلى سليمة
+    - **Cyst**: تكيس كلوي
+    - **Stone**: حصوة كلوية
+    - **Tumor**: كتلة / ورم
+
+    **المُدخل:** ملف صورة (JPEG أو PNG).
+
+    **المُخرج:** تصنيف المرض + نسبة الثقة + ملاحظة سريرية.
+
+    > ⚠️ هذه الأداة مساعدة للطبيب فقط ولا تُغني عن التشخيص الطبي المتخصص.
+    """
+    if not CT_CLASSIFIER_AVAILABLE or ct_classifier is None:
+        raise HTTPException(
+            status_code=503,
+            detail="CT Classifier is not available. Please install TensorFlow and run train_ultrasound.py."
+        )
+
+    if not ct_classifier.is_ready:
+        raise HTTPException(
+            status_code=503,
+            detail="CT Classifier model has not been trained yet. Run: python train_ultrasound.py"
+        )
+
+    # Validate file type
+    allowed_types = {"image/jpeg", "image/png", "image/jpg", "image/webp"}
+    if file.content_type not in allowed_types:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid file type: {file.content_type}. Accepted: JPEG, PNG."
+        )
+
+    try:
+        image_bytes = await file.read()
+        result = ct_classifier.predict(image_bytes)
+
+        if "error" in result and result["prediction"] is None:
+            raise HTTPException(status_code=500, detail=result["error"])
+
+        return {
+            "status":            "success",
+            "filename":         file.filename,
+            "prediction":       result["prediction"],
+            "confidence":       result["confidence"],
+            "all_probabilities": result["all_probabilities"],
+            "clinical_note":    result["clinical_note"],
+            "disclaimer":       (
+                "⚕️ هذه النتيجة مُقدَّمة من نموذج ذكاء اصطناعي مُدرَّب على بيانات أشعة مقطعية. "
+                "لا تُعدّ بديلاً عن التشخيص الطبي المتخصص."
+            )
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"CT analysis failed: {str(e)}")
 
 
 # =============================================================================
