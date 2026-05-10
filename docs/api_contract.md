@@ -16,9 +16,11 @@
 | `POST` | `/stage` | CKD Staging |
 | `POST` | `/predict` | Full AI Prediction |
 | `POST` | `/predict/image` | Predict from Lab Image (OCR) |
+| `POST` | `/predict/ct` | Predict from CT Scan Image (MobileNetV2) |
 | `POST` | `/report` | Generate PDF Report |
 | `GET` | `/report/download/{filename}` | Download PDF |
 | `POST` | `/chat` | Medical Q/A Chatbot |
+| `POST` | `/diet/plan` | 7-Day Smart Diet Planner |
 | `POST` | `/explain` | Explain Test Results |
 | `GET` | `/chat/status` | RAG Service Status |
 | `POST` | `/alerts/analyze` | Smart Alert Analysis |
@@ -298,7 +300,29 @@ const data = await response.json();
 
 ---
 
-## 6. Generate PDF Report
+## 6. Predict from CT Scan (Deep Learning)
+
+```
+POST /predict/ct
+Content-Type: multipart/form-data
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `file` | File | **Yes** | CT scan image (JPG/PNG) |
+
+**Response:**
+```json
+{
+  "prediction": "Tumor",
+  "confidence_percentage": 98.5,
+  "clinical_note": "AI detected a tumor in the CT scan. Please refer to a specialist immediately."
+}
+```
+
+---
+
+## 7. Generate PDF Report
 
 ```
 POST /report
@@ -324,7 +348,49 @@ Returns: `application/pdf` file. Open in new tab or trigger browser download.
 
 ---
 
-## 7. Medical Chatbot (RAG)
+## 8. Smart Diet Planner (7-Day Plan)
+
+```
+POST /diet/plan
+Content-Type: application/json
+```
+
+**Request:**
+```json
+{
+  "age": 60,
+  "weight_kg": 85,
+  "ckd_stage": "G3b",
+  "potassium_level": 5.2,
+  "phosphorus_level": 4.5,
+  "has_diabetes": true
+}
+```
+
+**Response:**
+```json
+{
+  "diet_plan": {
+    "days": [
+      {
+        "day": 1,
+        "meals": [
+          {"type": "Breakfast", "food": "Oatmeal with apples", "reason": "Low potassium"}
+        ]
+      }
+    ],
+    "nutritional_targets": {
+      "daily_calories": 2100,
+      "protein_limit_grams": 55,
+      "sodium_limit_mg": 2000
+    }
+  }
+}
+```
+
+---
+
+## 9. Medical Chatbot (RAG)
 
 ```
 POST /chat
