@@ -754,6 +754,8 @@
             <div class="nav-tab" onclick="switchTab('ocr')">Document OCR</div>
             <div class="nav-tab" onclick="switchTab('alerts')">Smart Alerts</div>
             <div class="nav-tab" onclick="switchTab('whatif')">What-If Simulator</div>
+            <div class="nav-tab" onclick="switchTab('ct')">CT Scan 🫁</div>
+            <div class="nav-tab" onclick="switchTab('diet')">Diet Planner 🥗</div>
             <div class="nav-tab" onclick="switchTab('chat')">Assistant Chat</div>
         </div>
 
@@ -1255,6 +1257,134 @@
             </div>
         </div>
 
+    </div>
+
+        <!-- ========================================== -->
+        <!-- TAB 6: CT Scan Classifier -->
+        <!-- ========================================== -->
+        <div id="tab-ct" class="tab-content">
+            <h1 class="page-title">CT Scan Classifier 🫁</h1>
+            <p class="page-subtitle">Upload a kidney CT scan image. The AI (MobileNetV2) will classify it as Normal, Cyst, Stone, or Tumor.</p>
+
+            <div class="grid-2">
+                <div class="card">
+                    <div class="card-header">📤 Upload CT Scan Image</div>
+                    <div class="upload-area" id="ctDropZone" onclick="document.getElementById('ctFile').click()">
+                        <input type="file" id="ctFile" accept="image/*" class="hidden" onchange="handleCTFileSelect(event)">
+                        <div class="upload-icon">🫁</div>
+                        <div class="upload-text">Click or drag a kidney CT scan image here</div>
+                        <div class="upload-hint">Accepted: JPG, PNG, DICOM-exported images</div>
+                    </div>
+                    <img id="ctPreview" src="" alt="CT Preview" style="max-width:100%; max-height:350px; margin-top:20px; display:none; border-radius:8px; border:1px solid var(--border-light);">
+                    <button class="btn btn-primary btn-block hidden" id="btnCT" style="margin-top:20px;" onclick="runCTAnalysis()">
+                        🔍 Analyze CT Scan
+                    </button>
+                    <div id="ctError" style="color:red; font-size:13px; margin-top:12px; text-align:center;"></div>
+                </div>
+
+                <div>
+                    <div id="ctResultEmpty" class="card" style="height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; opacity:0.6;">
+                        <span style="font-size:64px; margin-bottom:16px;">🔬</span>
+                        <h3 style="font-family:'Inter'; margin-bottom:8px;">Awaiting CT Scan</h3>
+                        <p style="font-size:14px;">Upload a kidney CT scan and click Analyze to get an AI classification result.</p>
+                    </div>
+
+                    <div id="ctResultData" class="hidden">
+                        <div class="card" style="text-align:center;">
+                            <div class="card-header" style="justify-content:center;">🤖 AI Classification Result</div>
+                            <div id="ctResultIcon" style="font-size:72px; margin: 16px 0;">❓</div>
+                            <div id="ctResultLabel" style="font-size:28px; font-weight:800; font-family:'Inter'; margin-bottom:8px;">--</div>
+                            <div id="ctResultConfidence" style="font-size:16px; color:var(--text-muted); margin-bottom:20px;">Confidence: --%</div>
+                            <div id="ctResultNote" style="font-size:13px; background:#f0f9ff; border:1px solid #bae6fd; border-radius:8px; padding:12px; color:#0369a1; text-align:right; line-height:1.7;"></div>
+                        </div>
+
+                        <div class="card" style="margin-top:0;">
+                            <div class="card-header">📊 Confidence Breakdown</div>
+                            <div id="ctProbBars"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ========================================== -->
+        <!-- TAB 7: Smart Diet Planner -->
+        <!-- ========================================== -->
+        <div id="tab-diet" class="tab-content">
+            <h1 class="page-title">Smart Diet Planner 🥗</h1>
+            <p class="page-subtitle">Generate a personalized 7-day kidney-safe meal plan based on the patient's lab values and CKD stage, following strict KDIGO nutritional guidelines.</p>
+
+            <div class="grid-2">
+                <div class="card">
+                    <div class="card-header">🧪 Patient Lab Values</div>
+                    <div class="grid-2">
+                        <div class="form-group">
+                            <label>CKD Stage *</label>
+                            <select id="d_stage">
+                                <option value="G1">G1 – Normal (eGFR ≥ 90)</option>
+                                <option value="G2">G2 – Mildly Decreased</option>
+                                <option value="G3a">G3a – Mild to Moderate</option>
+                                <option value="G3b" selected>G3b – Moderate to Severe</option>
+                                <option value="G4">G4 – Severely Decreased</option>
+                                <option value="G5">G5 – Kidney Failure</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Age</label>
+                            <input type="number" id="d_age" value="60">
+                        </div>
+                        <div class="form-group">
+                            <label>Weight (kg)</label>
+                            <input type="number" id="d_weight" value="80" step="0.5">
+                        </div>
+                        <div class="form-group">
+                            <label>Potassium (mmol/L)</label>
+                            <input type="number" id="d_potassium" value="5.2" step="0.1">
+                        </div>
+                        <div class="form-group">
+                            <label>Phosphorus (mg/dL)</label>
+                            <input type="number" id="d_phosphorus" value="4.5" step="0.1">
+                        </div>
+                        <div class="form-group">
+                            <label>Blood Glucose (mg/dL)</label>
+                            <input type="number" id="d_glucose" value="110" step="1">
+                        </div>
+                        <div class="form-group">
+                            <label>Sodium (mmol/L)</label>
+                            <input type="number" id="d_sodium" value="138" step="1">
+                        </div>
+                        <div class="form-group">
+                            <label>Has Diabetes?</label>
+                            <select id="d_diabetes">
+                                <option value="false">No</option>
+                                <option value="true">Yes</option>
+                            </select>
+                        </div>
+                    </div>
+                    <button class="btn btn-primary btn-block" onclick="runDietPlanner()" id="btnDiet">
+                        🥗 Generate 7-Day Diet Plan
+                    </button>
+                    <div id="dietError" style="color:red; font-size:13px; margin-top:12px; text-align:center;"></div>
+                </div>
+
+                <div>
+                    <div id="dietResultEmpty" class="card" style="height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; opacity:0.6;">
+                        <span style="font-size:64px; margin-bottom:16px;">🥗</span>
+                        <h3 style="font-family:'Inter'; margin-bottom:8px;">No Plan Generated Yet</h3>
+                        <p style="font-size:14px;">Fill in the patient's values and click Generate to receive a personalized, kidney-safe weekly meal plan.</p>
+                    </div>
+
+                    <div id="dietResultData" class="hidden">
+                        <div class="card">
+                            <div class="card-header">📋 7-Day Kidney-Safe Meal Plan</div>
+                            <div id="dietWarnings" style="margin-bottom:16px;"></div>
+                            <div id="dietDaysContainer" style="display:flex; flex-direction:column; gap:16px;"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
     </main>
 
     <!-- JavaScript Implementation -->
@@ -1264,19 +1394,12 @@
         // ─── INIT & TAB NAVIGATION ───
 
         function switchTab(tabId) {
-            // Hide all tabs
             document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
             document.querySelectorAll('.nav-tab').forEach(el => el.classList.remove('active'));
-
-            // Show target
             document.getElementById(`tab-${tabId}`).classList.add('active');
-
-            // Highlight nav
             const tabs = document.querySelectorAll('.nav-tab');
-            if (tabId === 'analysis') tabs[0].classList.add('active');
-            if (tabId === 'ocr') tabs[1].classList.add('active');
-            if (tabId === 'alerts') tabs[2].classList.add('active');
-            if (tabId === 'chat') tabs[3].classList.add('active');
+            const tabMap = { 'analysis': 0, 'ocr': 1, 'alerts': 2, 'whatif': 3, 'ct': 4, 'diet': 5, 'chat': 6 };
+            if (tabMap[tabId] !== undefined) tabs[tabMap[tabId]].classList.add('active');
         }
 
         async function checkSystemHealth() {
@@ -1946,15 +2069,208 @@
         }
 
         function transferWhatIfToAnalysis() {
-            // Transfer hypothetical values to the main analysis form and switch tab
             document.getElementById('a_age').value = document.getElementById('w_age').value;
             document.getElementById('a_sex').value = document.getElementById('w_sex').value;
             document.getElementById('a_cr').value = document.getElementById('w_sim_cr').value;
             document.getElementById('a_sys_bp').value = document.getElementById('w_sim_bp').value;
             document.getElementById('a_uacr').value = document.getElementById('w_sim_uacr').value;
-            
-            // Re-trigger analysis tab
             document.querySelector('.nav-tab[onclick="switchTab(\'analysis\')"]').click();
+        }
+
+        // ==========================================
+        // CT SCAN CLASSIFIER
+        // ==========================================
+
+        let ctFile = null;
+
+        function handleCTFileSelect(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            ctFile = file;
+            const preview = document.getElementById('ctPreview');
+            preview.src = URL.createObjectURL(file);
+            preview.style.display = 'block';
+            document.getElementById('btnCT').classList.remove('hidden');
+            document.getElementById('ctError').textContent = '';
+        }
+
+        // Also support drag-and-drop on CT zone
+        document.addEventListener('DOMContentLoaded', () => {
+            const ctZone = document.getElementById('ctDropZone');
+            if (ctZone) {
+                ctZone.addEventListener('dragover', e => { e.preventDefault(); ctZone.classList.add('dragover'); });
+                ctZone.addEventListener('dragleave', () => ctZone.classList.remove('dragover'));
+                ctZone.addEventListener('drop', e => {
+                    e.preventDefault();
+                    ctZone.classList.remove('dragover');
+                    const file = e.dataTransfer.files[0];
+                    if (file && file.type.startsWith('image/')) {
+                        ctFile = file;
+                        const preview = document.getElementById('ctPreview');
+                        preview.src = URL.createObjectURL(file);
+                        preview.style.display = 'block';
+                        document.getElementById('btnCT').classList.remove('hidden');
+                    }
+                });
+            }
+        });
+
+        const CT_CLASS_META = {
+            'Normal':  { icon: '✅', note: 'No abnormalities detected. The kidney tissue appears healthy. Continue routine monitoring as per the patient\'s CKD stage.' },
+            'Cyst':    { icon: '🫧', note: 'A cystic lesion was detected. Most renal cysts are benign (Bosniak I/II), but follow-up imaging in 6-12 months is recommended to monitor size and morphology.' },
+            'Stone':   { icon: '🪨', note: 'A kidney stone (nephrolithiasis) was detected. Management depends on stone size and location. Urological consultation and dietary adjustment are advised.' },
+            'Tumor':   { icon: '⚠️', note: 'A renal mass was detected that may indicate a tumor. Urgent urological and oncological consultation is strongly recommended for further characterization (contrast CT / MRI / biopsy).' }
+        };
+
+        async function runCTAnalysis() {
+            if (!ctFile) { document.getElementById('ctError').textContent = 'Please upload a CT scan image first.'; return; }
+            const btn = document.getElementById('btnCT');
+            const err = document.getElementById('ctError');
+            err.textContent = '';
+            btn.innerHTML = '<div class="spinner"></div> Analyzing...';
+            btn.disabled = true;
+
+            try {
+                const formData = new FormData();
+                formData.append('file', ctFile);
+                const res = await fetch(`${API_BASE}/predict/ct`, { method: 'POST', body: formData });
+                if (!res.ok) {
+                    const errJson = await res.json().catch(() => ({}));
+                    throw new Error(errJson.detail || `API Error ${res.status}`);
+                }
+                const data = await res.json();
+                const label = data.prediction || 'Unknown';
+                const conf  = data.confidence_percentage ?? (data.confidence ? data.confidence * 100 : 0);
+                const meta  = CT_CLASS_META[label] || { icon: '❓', note: data.clinical_note || '' };
+
+                document.getElementById('ctResultEmpty').classList.add('hidden');
+                document.getElementById('ctResultData').classList.remove('hidden');
+                document.getElementById('ctResultIcon').textContent = meta.icon;
+                document.getElementById('ctResultLabel').textContent = label;
+                document.getElementById('ctResultConfidence').textContent = `Confidence: ${conf.toFixed(1)}%`;
+                document.getElementById('ctResultNote').textContent = data.clinical_note || meta.note;
+
+                // Confidence Breakdown bars
+                const barsDiv = document.getElementById('ctProbBars');
+                barsDiv.innerHTML = '';
+                const classes = data.class_probabilities || { [label]: conf / 100 };
+                const colors = { Normal: '#16a34a', Cyst: '#0ea5e9', Stone: '#f59e0b', Tumor: '#dc2626' };
+                Object.entries(classes).forEach(([cls, prob]) => {
+                    const pct = (prob * 100).toFixed(1);
+                    barsDiv.innerHTML += `
+                        <div style="margin-bottom:12px;">
+                            <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:4px;">
+                                <span style="font-weight:600;">${cls}</span><span>${pct}%</span>
+                            </div>
+                            <div style="height:8px; background:#e2e8f0; border-radius:4px; overflow:hidden;">
+                                <div style="height:100%; width:${pct}%; background:${colors[cls] || '#64748b'}; border-radius:4px; transition:width 1s ease;"></div>
+                            </div>
+                        </div>`;
+                });
+
+            } catch(e) {
+                err.textContent = `CT Analysis Error: ${e.message}`;
+            } finally {
+                btn.innerHTML = '🔍 Analyze CT Scan';
+                btn.disabled = false;
+            }
+        }
+
+        // ==========================================
+        // SMART DIET PLANNER
+        // ==========================================
+
+        async function runDietPlanner() {
+            const btn = document.getElementById('btnDiet');
+            const err = document.getElementById('dietError');
+            err.textContent = '';
+            btn.innerHTML = '<div class="spinner"></div> Generating Plan...';
+            btn.disabled = true;
+
+            const payload = {
+                ckd_stage:        document.getElementById('d_stage').value,
+                age:              parseInt(document.getElementById('d_age').value) || 60,
+                weight_kg:        parseFloat(document.getElementById('d_weight').value) || 80,
+                potassium_level:  parseFloat(document.getElementById('d_potassium').value) || 4.5,
+                phosphorus_level: parseFloat(document.getElementById('d_phosphorus').value) || 3.5,
+                glucose_level:    parseFloat(document.getElementById('d_glucose').value) || 100,
+                sodium_level:     parseFloat(document.getElementById('d_sodium').value) || 138,
+                has_diabetes:     document.getElementById('d_diabetes').value === 'true'
+            };
+
+            try {
+                const res = await fetch(`${API_BASE}/diet/plan`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                if (!res.ok) {
+                    const errJson = await res.json().catch(() => ({}));
+                    throw new Error(errJson.detail || `API Error ${res.status}`);
+                }
+                const data = await res.json();
+
+                document.getElementById('dietResultEmpty').classList.add('hidden');
+                document.getElementById('dietResultData').classList.remove('hidden');
+
+                // Render warnings / restrictions
+                const warnDiv = document.getElementById('dietWarnings');
+                warnDiv.innerHTML = '';
+                const restrictions = data.dietary_restrictions || [];
+                if (restrictions.length > 0) {
+                    warnDiv.innerHTML = `
+                        <div style="background:#fff7ed; border:1px solid #fdba74; border-radius:8px; padding:12px 16px; font-size:13px; color:#9a3412;">
+                            <strong>⚠️ Key Restrictions for This Patient:</strong>
+                            <ul style="margin-top:6px; margin-right:20px; line-height:1.7;">
+                                ${restrictions.map(r => `<li>${r}</li>`).join('')}
+                            </ul>
+                        </div>`;
+                }
+
+                // Render each day
+                const container = document.getElementById('dietDaysContainer');
+                container.innerHTML = '';
+                const days = data.diet_plan?.days || data.days || [];
+                const dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+
+                days.forEach((day, idx) => {
+                    const meals = day.meals || [];
+                    const mealRows = meals.map(m => `
+                        <tr style="border-top:1px solid #f1f5f9;">
+                            <td style="padding:8px 12px; font-weight:600; color:#475569; white-space:nowrap;">${m.type || m.meal_type || ''}</td>
+                            <td style="padding:8px 12px; color:#1e293b;">${m.food || m.description || ''}</td>
+                            <td style="padding:8px 12px; font-size:12px; color:#64748b;">${m.reason || m.notes || ''}</td>
+                        </tr>`).join('');
+
+                    container.innerHTML += `
+                        <div style="border:1px solid #e2e8f0; border-radius:10px; overflow:hidden;">
+                            <div style="background:#eff6ff; padding:10px 16px; font-weight:700; color:#1e40af; display:flex; align-items:center; gap:8px;">
+                                <span>📅</span> Day ${day.day || idx + 1} &mdash; ${dayNames[(idx) % 7]}
+                            </div>
+                            <table style="width:100%; border-collapse:collapse; font-size:13px;">
+                                <thead>
+                                    <tr style="background:#f8fafc;">
+                                        <th style="padding:8px 12px; text-align:right; color:#94a3b8; font-size:11px; text-transform:uppercase;">Meal</th>
+                                        <th style="padding:8px 12px; text-align:right; color:#94a3b8; font-size:11px; text-transform:uppercase;">Food</th>
+                                        <th style="padding:8px 12px; text-align:right; color:#94a3b8; font-size:11px; text-transform:uppercase;">Notes</th>
+                                    </tr>
+                                </thead>
+                                <tbody>${mealRows}</tbody>
+                            </table>
+                        </div>`;
+                });
+
+                if (days.length === 0) {
+                    container.innerHTML = `<p style="color:var(--text-muted); text-align:center; padding:20px;">
+                        The server returned a plan but with no day data. Check the raw response format.</p>`;
+                }
+
+            } catch(e) {
+                err.textContent = `Diet Planner Error: ${e.message}`;
+            } finally {
+                btn.innerHTML = '🥗 Generate 7-Day Diet Plan';
+                btn.disabled = false;
+            }
         }
 
     </script>
