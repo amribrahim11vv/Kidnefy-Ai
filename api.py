@@ -23,47 +23,82 @@ import uvicorn
 import pandas as pd
 import numpy as np
 
-# Import our modules
+# Import our modules (all wrapped to prevent server crash if a dependency is missing)
 from src.preprocessing import DataLoader, calculate_egfr, FeatureEngineer
-from src.models import EnsembleModel
 from src.staging import GFRCalculator, RiskAssessor, GFRStage, RiskLevel
-from src.reports import PDFReportGenerator, PatientInfo, TestResult
-from src.models.staging_model import StagingModel
-from src.monitoring import LongitudinalMonitor, SmartAlertEngine
-from src.explainability import SHAPExplainer
 from config import CORS_ORIGINS
+
+try:
+    from src.models import EnsembleModel
+    ENSEMBLE_AVAILABLE = True
+except Exception as e:
+    ENSEMBLE_AVAILABLE = False
+    EnsembleModel = None
+    print(f"Warning: ML/DL models not available ({e}). Prediction will use staging fallback.")
+
+try:
+    from src.models.staging_model import StagingModel
+    STAGING_MODEL_AVAILABLE = True
+except Exception as e:
+    STAGING_MODEL_AVAILABLE = False
+    StagingModel = None
+    print(f"Warning: Staging model not available ({e}).")
+
+try:
+    from src.reports import PDFReportGenerator, PatientInfo, TestResult
+    REPORTS_AVAILABLE = True
+except Exception as e:
+    REPORTS_AVAILABLE = False
+    print(f"Warning: PDF report generation not available ({e}).")
+
+try:
+    from src.monitoring import LongitudinalMonitor, SmartAlertEngine
+    MONITORING_AVAILABLE = True
+except Exception as e:
+    MONITORING_AVAILABLE = False
+    LongitudinalMonitor = None
+    SmartAlertEngine = None
+    print(f"Warning: Monitoring not available ({e}).")
+
+try:
+    from src.explainability import SHAPExplainer
+    SHAP_AVAILABLE = True
+except Exception as e:
+    SHAP_AVAILABLE = False
+    SHAPExplainer = None
+    print(f"Warning: SHAP explainability not available ({e}).")
 
 # Try to import OCR (may fail if dependencies not installed)
 try:
     from src.ocr import LabImageExtractor
     OCR_AVAILABLE = True
-except ImportError:
+except Exception as e:
     OCR_AVAILABLE = False
-    print("Warning: OCR dependencies not installed. Image processing will be disabled.")
+    print(f"Warning: OCR not available ({e}). Image processing will be disabled.")
 
 # Try to import RAG
 try:
     from src.rag import GeminiRAG
     RAG_AVAILABLE = True
-except ImportError:
+except Exception as e:
     RAG_AVAILABLE = False
-    print("Warning: RAG dependencies not installed. Chat feature will be disabled.")
+    print(f"Warning: RAG not available ({e}). Chat feature will be disabled.")
 
 # Try to import Smart Diet Planner
 try:
     from src.rag.diet_planner import SmartDietPlanner
     DIET_PLANNER_AVAILABLE = True
-except ImportError:
+except Exception as e:
     DIET_PLANNER_AVAILABLE = False
-    print("Warning: Diet Planner could not be imported.")
+    print(f"Warning: Diet Planner not available ({e}).")
 
 # Try to import CT Kidney Image Classifier
 try:
     from src.imaging.kidney_image_classifier import KidneyImageClassifier
     CT_CLASSIFIER_AVAILABLE = True
-except ImportError:
+except Exception as e:
     CT_CLASSIFIER_AVAILABLE = False
-    print("Warning: CT Classifier could not be imported. Install TensorFlow to enable.")
+    print(f"Warning: CT Classifier not available ({e}).")
 
 
 # =============================================================================
@@ -272,16 +307,16 @@ class HealthResponse(BaseModel):
 # --- Global instances (module-level, available before lifespan runs) ---
 gfr_calculator = GFRCalculator()
 risk_assessor = RiskAssessor()
-report_generator = PDFReportGenerator(output_dir="generated_reports")
+report_generator = PDFReportGenerator(output_dir="generated_reports") if REPORTS_AVAILABLE else None
 ensemble_model = None  # Will be loaded on startup
 staging_model = None   # AI Staging Model
 ocr_extractor = None
 rag_engine = None  # RAG for medical Q&A
 diet_planner = None  # Smart Diet Planner
-longitudinal_monitor = LongitudinalMonitor()
+longitudinal_monitor = LongitudinalMonitor() if MONITORING_AVAILABLE and LongitudinalMonitor else None
 smart_alert_engine = None  # Will be initialized on startup
 feature_engineer = FeatureEngineer()
-shap_explainer = SHAPExplainer()
+shap_explainer = SHAPExplainer() if SHAP_AVAILABLE and SHAPExplainer else None
 xai_ready = False
 ct_classifier = None  # CT Kidney Image Classifier
 
@@ -303,19 +338,19 @@ async def lifespan(app: FastAPI):
 
     # Load ML ensemble (metadata + joblib checkpoints + optional DL)
     model_path = Path("models")
-    if model_path.exists():
+    if ENSEMBLE_AVAILABLE and model_path.exists():
         try:
             ensemble_model = EnsembleModel(str(model_path))
             ensemble_model.load()
             if ensemble_model.is_trained:
-                print("✅ ML models loaded successfully")
+                print("ML models loaded successfully")
             else:
-                print("⚠️ No trained ML checkpoints found under models/ (train or add .joblib files)")
+                print("No trained ML checkpoints found under models/ (train or add .joblib files)")
         except Exception as e:
-            print(f"⚠️ Could not load ML models: {e}")
+            print(f"Could not load ML models: {e}")
 
     xai_ready = False
-    if ensemble_model and ensemble_model.is_trained:
+    if shap_explainer and ensemble_model and ensemble_model.is_trained:
         xgb_m = ensemble_model.ml_models.models.get("XGBoost")
         if xgb_m is not None:
             try:
@@ -332,62 +367,59 @@ async def lifespan(app: FastAPI):
                 shap_explainer.fit(xgb_m, bg, model_type="tree")
                 xai_ready = shap_explainer.explainer is not None
                 if xai_ready:
-                    print("✅ SHAP explainer initialized")
+                    print("SHAP explainer initialized")
             except Exception as e:
-                print(f"⚠️ SHAP initialization failed: {e}")
+                print(f"SHAP initialization failed: {e}")
 
     # Load Staging Model
-    try:
-        staging_model = StagingModel()
-    except Exception as e:
-        print(f"⚠️ Could not load Staging model: {e}")
+    if STAGING_MODEL_AVAILABLE:
+        try:
+            staging_model = StagingModel()
+        except Exception as e:
+            print(f"Could not load Staging model: {e}")
 
     # Initialize OCR
     if OCR_AVAILABLE:
-        try:
-            ocr_extractor = LabImageExtractor()
-            print("✅ OCR engine initialized")
-        except Exception as e:
-            print(f"⚠️ OCR initialization failed: {e}")
+        print("OCR module is available. It will be initialized on first use to prevent startup crashes.")
 
     # Initialize RAG
     if RAG_AVAILABLE:
-        try:
-            rag_engine = GeminiRAG()
-            print("✅ RAG engine initialized")
-        except Exception as e:
-            print(f"⚠️ RAG initialization failed: {e}")
+        print("RAG module is available. It will be initialized on first use to prevent ChromaDB startup crashes.")
 
     # Initialize Smart Alerts
-    smart_alert_engine = SmartAlertEngine(
-        monitor=longitudinal_monitor,
-        gemini_rag=rag_engine
-    )
-    print("✅ Smart Alert Engine initialized")
+    if MONITORING_AVAILABLE and SmartAlertEngine:
+        try:
+            smart_alert_engine = SmartAlertEngine(
+                monitor=longitudinal_monitor,
+                gemini_rag=rag_engine
+            )
+            print("Smart Alert Engine initialized")
+        except Exception as e:
+            print(f"Smart Alert Engine failed: {e}")
 
     # Initialize Smart Diet Planner
     if DIET_PLANNER_AVAILABLE:
         try:
             diet_planner = SmartDietPlanner()
             if diet_planner.is_active:
-                print("✅ Smart Diet Planner initialized")
+                print("[OK] Smart Diet Planner initialized")
             else:
-                print("⚠️ Smart Diet Planner: GEMINI_API_KEY missing, feature disabled.")
+                print("[WARN] Smart Diet Planner: GEMINI_API_KEY missing, feature disabled.")
         except Exception as e:
-            print(f"⚠️ Diet Planner initialization failed: {e}")
+            print(f"[FAIL] Diet Planner initialization failed: {e}")
 
     # Initialize CT Kidney Image Classifier
     if CT_CLASSIFIER_AVAILABLE:
         try:
             ct_classifier = KidneyImageClassifier()
             if ct_classifier.is_ready:
-                print("✅ CT Kidney Classifier loaded successfully")
+                print("[OK] CT Kidney Classifier loaded successfully")
             else:
-                print("⚠️ CT Classifier: No trained model found. Run train_ultrasound.py first.")
+                print("[WARN] CT Classifier: No trained model found. Run train_ultrasound.py first.")
         except Exception as e:
-            print(f"⚠️ CT Classifier initialization failed: {e}")
+            print(f"[FAIL] CT Classifier initialization failed: {e}")
 
-    print("✅ API ready!")
+    print("[OK] API ready!")
     yield
     # Shutdown cleanup (if any) goes here
 
@@ -876,11 +908,23 @@ async def predict_from_image(
     
     Extracts values from the image and makes prediction.
     """
-    if not OCR_AVAILABLE or ocr_extractor is None:
+    global ocr_extractor
+    
+    if not OCR_AVAILABLE:
         raise HTTPException(
             status_code=503,
-            detail="OCR service not available. Please install easyocr or pytesseract."
+            detail="OCR service not available. Please install dependencies."
         )
+        
+    if ocr_extractor is None:
+        try:
+            from src.ocr import LabImageExtractor
+            ocr_extractor = LabImageExtractor()
+        except Exception as e:
+            raise HTTPException(
+                status_code=503,
+                detail=f"OCR initialization failed dynamically: {str(e)}"
+            )
     
     try:
         # Save uploaded file
@@ -1140,6 +1184,13 @@ async def chat(request: ChatRequest):
     """
     global rag_engine
     
+    if RAG_AVAILABLE and rag_engine is None:
+        try:
+            from src.rag import GeminiRAG
+            rag_engine = GeminiRAG()
+        except Exception as e:
+            print(f"RAG dynamic initialization failed: {e}")
+            
     if not RAG_AVAILABLE or rag_engine is None:
         return {
             "answer": "عذراً دكتور، نظام الذكاء الاصطناعي للمحادثة (RAG) غير متصل حالياً. يرجى التأكد من إضافة مفتاح `GEMINI_API_KEY` في ملف `.env` وتثبيت المكتبات المطلوبة ليعمل النظام بشكل كامل.",
@@ -1184,6 +1235,13 @@ async def explain_results(request: ExplainRequest):
     """
     global rag_engine
     
+    if RAG_AVAILABLE and rag_engine is None:
+        try:
+            from src.rag import GeminiRAG
+            rag_engine = GeminiRAG()
+        except Exception as e:
+            print(f"RAG dynamic initialization failed: {e}")
+            
     if not RAG_AVAILABLE or rag_engine is None:
         # Provide basic explanation without RAG
         explanations = {

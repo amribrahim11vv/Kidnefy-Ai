@@ -3,6 +3,7 @@ Text Extractor Module
 Extract medical test values from lab result images using OCR.
 """
 
+import os
 import re
 import numpy as np
 from typing import Dict, Any, List, Tuple, Optional, Union
@@ -11,14 +12,21 @@ from dataclasses import dataclass
 import warnings
 warnings.filterwarnings('ignore')
 
-try:
-    import easyocr
-    EASYOCR_AVAILABLE = True
-except ImportError:
-    EASYOCR_AVAILABLE = False
+# easyocr will be imported lazily to prevent Torch DLL Access Violation from crashing the server on startup
+EASYOCR_AVAILABLE = False
 
 try:
     import pytesseract
+    # Configure tesseract path for Windows common installations
+    if os.name == 'nt':
+        common_paths = [
+            r'C:\Program Files\Tesseract-OCR\tesseract.exe',
+            r'C:\Users\\' + os.getlogin() + r'\AppData\Local\Tesseract-OCR\tesseract.exe'
+        ]
+        for path in common_paths:
+            if Path(path).exists():
+                pytesseract.pytesseract.tesseract_cmd = path
+                break
     PYTESSERACT_AVAILABLE = True
 except ImportError:
     PYTESSERACT_AVAILABLE = False
@@ -253,20 +261,24 @@ class LabImageExtractor:
         self.reader = None
         self.ocr_engine = None
         
-        if EASYOCR_AVAILABLE:
-            try:
-                self.reader = easyocr.Reader(languages, gpu=False)
-                self.ocr_engine = 'easyocr'
-                print("Using EasyOCR engine")
-            except Exception as e:
-                print(f"EasyOCR initialization failed: {e}")
+        # Try to load EasyOCR lazily to avoid Torch startup crashes
+        global EASYOCR_AVAILABLE
+        try:
+            import easyocr
+            EASYOCR_AVAILABLE = True
+            self.reader = easyocr.Reader(languages, gpu=False)
+            self.ocr_engine = 'easyocr'
+            print("Using EasyOCR engine")
+        except Exception as e:
+            print(f"EasyOCR initialization failed: {e}")
+            EASYOCR_AVAILABLE = False
         
         if self.reader is None and PYTESSERACT_AVAILABLE:
             self.ocr_engine = 'tesseract'
             print("Using Tesseract OCR engine")
         
         if self.ocr_engine is None:
-            raise RuntimeError("No OCR engine available. Install easyocr or pytesseract.")
+            print("Warning: No OCR engine available. Text extraction will fail.")
     
     def extract_text(
         self,
@@ -305,27 +317,32 @@ class LabImageExtractor:
             full_text = ' '.join([r['text'] for r in regions])
             
         else:  # Tesseract
-            # Get detailed output
-            data = pytesseract.image_to_data(
-                processed, 
-                output_type=pytesseract.Output.DICT
-            )
-            
-            for i, text in enumerate(data['text']):
-                if text.strip():
-                    conf = int(data['conf'][i]) / 100 if data['conf'][i] != -1 else 0
-                    regions.append({
-                        'text': text,
-                        'confidence': conf,
-                        'bbox': [
-                            data['left'][i],
-                            data['top'][i],
-                            data['width'][i],
-                            data['height'][i]
-                        ]
-                    })
-            
-            full_text = pytesseract.image_to_string(processed)
+            try:
+                # Get detailed output
+                data = pytesseract.image_to_data(
+                    processed, 
+                    output_type=pytesseract.Output.DICT
+                )
+                
+                for i, text in enumerate(data['text']):
+                    if text.strip():
+                        conf = int(data['conf'][i]) / 100 if data['conf'][i] != -1 else 0
+                        regions.append({
+                            'text': text,
+                            'confidence': conf,
+                            'bbox': [
+                                data['left'][i],
+                                data['top'][i],
+                                data['width'][i],
+                                data['height'][i]
+                            ]
+                        })
+                
+                full_text = pytesseract.image_to_string(processed)
+            except pytesseract.pytesseract.TesseractNotFoundError:
+                raise RuntimeError("Tesseract OCR is not installed or not in PATH. Please install Tesseract-OCR to use this feature.")
+            except Exception as e:
+                raise RuntimeError(f"Tesseract OCR failed: {str(e)}")
         
         return full_text, regions
     

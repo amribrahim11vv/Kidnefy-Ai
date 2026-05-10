@@ -1376,7 +1376,14 @@
                     body: formData
                 });
 
-                if (!res.ok) throw new Error("API request failed");
+                if (!res.ok) {
+                    let errorMsg = "API request failed";
+                    try {
+                        const errorJson = await res.json();
+                        errorMsg = errorJson.detail || errorMsg;
+                    } catch (e) {}
+                    throw new Error(errorMsg);
+                }
                 const result = await res.json();
 
                 document.getElementById('ocrResultsEmpty').classList.add('hidden');
