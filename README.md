@@ -140,28 +140,28 @@ sequenceDiagram
 
 ## 🚀 3. Setup & Installation (For Backend Devs)
 
+We have created an automated setup script to make running the project as easy as possible.
+
 1. **Clone the repo** (Make sure Git LFS is installed for the model weights):
    ```bash
    git lfs install
    git clone https://github.com/amribrahim11vv/Kidnefy-Ai.git
    cd Kidnefy-Ai
    ```
-2. **Create & Activate Virtual Environment**:
+2. **Run the Automated Setup (Windows)**:
+   Simply double-click on the `setup_and_run.bat` file in the root directory. This script will automatically:
+   - Create a virtual environment (`.venv`)
+   - Install all Python dependencies
+   - Create a `.env` file (if missing)
+   - Start the FastAPI server on `http://127.0.0.1:8000/docs`
+
+3. **Manual Setup (Mac/Linux)**:
    ```bash
    python -m venv .venv
-   .venv\Scripts\activate
-   ```
-3. **Install Dependencies**:
-   ```bash
+   source .venv/bin/activate
    pip install -r requirements.txt
-   ```
-4. **Environment Variables**:
-   Create a `.env` file in the root folder and add:
-   ```env
-   GEMINI_API_KEY=your_google_ai_studio_key_here
-   ```
-5. **Run the Server**:
-   ```bash
+   cp .env.example .env
+   # Edit .env and add your GEMINI_API_KEY
    uvicorn api:app --host 0.0.0.0 --port 8000 --reload
    ```
 
@@ -258,8 +258,14 @@ const result = await response.json();
 ```text
 kidney_disease_prediction/
 |-- api.py                    <- The Brain. Contains all FastAPI endpoints.
+|-- setup_and_run.bat         <- Automated one-click setup script for Windows.
+|-- config.py                 <- Central configuration and paths.
 |-- .env                      <- Put your API keys here.
 |-- requirements.txt          <- Python libraries.
+|
+|-- docs/                     <- Comprehensive Team Documentation
+|   |-- TEAM_ONBOARDING_GUIDE.md <- Ultimate guide for new developers
+|   +-- CODEBASE_MAP.md       <- Detailed index of what every file does
 |
 |-- models/                   <- AI Models Folder
 |   |-- kidney_ct_classifier.keras <- The Deep Learning CT Model (24MB)
@@ -271,6 +277,10 @@ kidney_disease_prediction/
 |   |-- rag/                  <- Chatbot & ChromaDB scripts
 |   |-- staging/              <- KDIGO mathematical formulas
 |   |-- preprocessing/        <- Data cleaning scripts
+|
+|-- scripts/                  <- Development & Training Scripts
+|   |-- train_ultrasound.py   <- Scripts used for ML training
+|   +-- evaluate_ct_model.py  <- Evaluation and metrics generation
 ```
 
 ---
