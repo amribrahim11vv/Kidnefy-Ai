@@ -19,5 +19,9 @@ Please read these documents in the following order to fully understand everythin
 * **What is it?** The ultimate reference for the Frontend team.
 * **Why read it?** It contains the exact JSON structures, endpoints, request methods, and expected responses for every single feature (Prediction, OCR, Chatbot, CT Scan, Diet Planner, etc.). If you are building the UI, this is your bible.
 
+### 4. 🎓 [Graduation Thesis Docs](thesis_docs/)
+* **What is it?** A dedicated folder containing the full academic documentation in Arabic.
+* **Why read it?** If you are writing the final graduation book (Thesis), this folder contains the System Analysis, Project Report, Architecture, and Technical Specifications, all updated with the latest 9 AI features.
+
 ---
 *Kidnefy-AI Project — 2026*

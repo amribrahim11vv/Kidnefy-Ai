@@ -158,6 +158,56 @@ patient_sex: male
 
 ---
 
+### Predict from CT Scan (MobileNetV2)
+```http
+POST /predict/ct
+Content-Type: multipart/form-data
+
+file: [image.jpg]
+```
+
+**Response:**
+```json
+{
+    "prediction": "Tumor",
+    "confidence_percentage": 98.5,
+    "clinical_note": "AI detected a tumor in the CT scan."
+}
+```
+
+---
+
+### Smart Diet Planner
+```http
+POST /diet/plan
+Content-Type: application/json
+
+{
+    "age": 60,
+    "weight_kg": 85,
+    "ckd_stage": "G3b",
+    "potassium_level": 5.2,
+    "phosphorus_level": 4.5,
+    "has_diabetes": true
+}
+```
+
+**Response:**
+```json
+{
+    "diet_plan": {
+        "days": [
+            {
+                "day": 1,
+                "meals": [{"type": "Breakfast", "food": "Oatmeal", "reason": "Low potassium"}]
+            }
+        ]
+    }
+}
+```
+
+---
+
 ### Generate PDF Report
 ```http
 POST /report

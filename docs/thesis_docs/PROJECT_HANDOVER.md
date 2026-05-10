@@ -8,6 +8,8 @@ AI-powered system for predicting Chronic Kidney Disease (CKD) and Diabetic Nephr
 4.  **RAG System**: Gemini 1.5 Flash for medical Q&A
 5.  **Staging & Risk**: eGFR (CKD-EPI 2021) + KDIGO staging
 6.  **AI Staging (New)**: XGBoost Classifier for 6-class prediction (0-5) learned from 4000 patient records.
+7.  **CT Vision Classifier (New)**: MobileNetV2 CNN for detecting 4 classes (Tumor, Cyst, Stone, Normal).
+8.  **Smart Diet Planner (New)**: Gemini-powered 7-day personalized meal planner.
 
 ---
 
@@ -28,6 +30,7 @@ kidney_disease_prediction/
 │   ├── ocr/            # Image processing + text extraction
 │   ├── rag/            # Gemini RAG + ChromaDB vector DB
 │   ├── reports/        # PDF generation logic
+│   ├── imaging/        # CT image classification (MobileNetV2)
 │   └── staging/        # eGFR calc + KDIGO risk assessment
 │
 ├── models/             # Trained CKD models (.joblib, .keras)
@@ -110,7 +113,9 @@ python train_staging.py
 5.  **XGBoost Compatibility**: Removed deprecated parameters
 6.  **RAG Updates**: Updated to modern `chromadb` API and `gemini-1.5-flash`
 7.  **AI Staging**: Added support for 5-stage prediction using new dataset (4000 records)
-8.  **Cleanup**: Removed debug files, pinned dependency versions, added `.gitignore`
+8.  **CT Scan**: Added `MobileNetV2` integration for `.keras` inference.
+9.  **Diet Planner**: Added strict medical prompt injection for KDIGO guidelines.
+10. **Cleanup**: Moved old training scripts to `scripts/`, archived old docs to `docs/thesis_docs/`.
 
 ---
 

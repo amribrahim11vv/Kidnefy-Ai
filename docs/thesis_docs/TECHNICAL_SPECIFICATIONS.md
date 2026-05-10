@@ -25,8 +25,9 @@ This project is a comprehensive AI-powered system for detecting, staging, and ma
     *   **Embeddings:** Default ChromaDB embeddings / Gemini embeddings
 
 ### Computer Vision & OCR
-*   **Primary Engine:** EasyOCR (Deep learning-based OCR)
-*   **Fallback Engine:** Tesseract (via `pytesseract`)
+*   **Medical Imaging (CT Scans):** MobileNetV2 (Transfer Learning CNN) for 4-class prediction (Tumor, Cyst, Stone, Normal).
+*   **Primary OCR Engine:** EasyOCR (Deep learning-based OCR)
+*   **Fallback OCR Engine:** Tesseract (via `pytesseract`)
 *   **Image Processing:** OpenCV (`cv2`)
     *   Adaptive Thresholding
     *   Noise Removal (Bilateral Filtering)
@@ -64,6 +65,12 @@ Provides intelligent explanations of lab results.
 *   **Retrieval:** Semantic search finds the most relevant medical guidelines based on user queries.
 *   **Generation:** Gemini Pro synthesizes the retrieved guidelines with patient specific data (eGFR, Age, etc.) to give a personalized, medically-grounded answer.
 
+### D. Medical Vision Model (CT Scans)
+Classifies kidney CT images to assist radiologists.
+*   **Architecture:** MobileNetV2 with pre-trained ImageNet weights.
+*   **Custom Head:** GlobalAveragePooling2D -> Dense(128) -> Dropout(0.5) -> Dense(4, Softmax).
+*   **Classes:** Normal, Cyst, Stone, Tumor.
+
 ## 4. Key Features & Modules
 
 ### 1. Lab Result Scanner (OCR)
@@ -94,8 +101,10 @@ Provides intelligent explanations of lab results.
 | :--- | :--- | :--- |
 | `POST` | `/predict` | Predict CKD probability using ML/DL models. |
 | `POST` | `/predict/image` | Upload lab image -> OCR -> Auto-Prediction. |
+| `POST` | `/predict/ct` | Upload CT Scan image -> MobileNetV2 Classification. |
 | `POST` | `/stage` | Calculate GFR Stage & Risk based on values. |
 | `POST` | `/chat` | RAG-based medical Q&A about kidney health. |
+| `POST` | `/diet/plan` | Generate personalized 7-day diet plan. |
 | `POST` | `/report` | Generate PDF health report. |
 | `GET` | `/health` | System health check. |
 
