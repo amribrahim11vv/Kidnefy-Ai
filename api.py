@@ -617,6 +617,7 @@ async def predict(request: PredictionRequest):
                 df_features = df_features[trained_features]
             
             # Get probability
+            df_features = df_features.astype(float)  # Prevent XGBoost object dtype crash
             feature_vector = df_features.values
             _, _, details = ensemble_model.predict_with_confidence(feature_vector)
             probability = float(details['ensemble_proba'][0])
@@ -658,8 +659,9 @@ async def predict(request: PredictionRequest):
             # We pass all available labs + patient info
             stage_input = {
                 "age": patient.age,
-                "pressure_level": labs.blood_pressure if labs.blood_pressure else 120, # Default BP
+                "blood_pressure": labs.blood_pressure if labs.blood_pressure else 120, # Default BP
                 "serum_creatinine": labs.creatinine,
+                "gfr": egfr,
                 "bun": labs.blood_urea if labs.blood_urea else 40, # Default BUN
                 "serum_calcium": 9.0, # Default Ca (not in input)
                 "hemoglobin": labs.hemoglobin if labs.hemoglobin else 14.0,
@@ -668,8 +670,14 @@ async def predict(request: PredictionRequest):
 
         # Improve confidence using model agreement when ensemble is trained
         if ensemble_model and ensemble_model.is_trained:
-            confidence_score = float(details.get('confidence', [abs(probability - 0.5) * 2])[0])
-            agreement = float(details.get('model_agreement', [1.0])[0])
+            # Safely extract confidence and agreement (might be scalar or array)
+            conf_val = details.get('confidence', abs(probability - 0.5) * 2)
+            confidence_score = float(conf_val[0] if isinstance(conf_val, (list, np.ndarray)) and len(conf_val) > 0 else conf_val)
+            
+            agr_val = details.get('model_agreement', 1.0)
+            agreement = float(agr_val[0] if isinstance(agr_val, (list, np.ndarray)) and len(agr_val) > 0 else agr_val)
+            if np.isnan(agreement):
+                agreement = 0.5
             # Blend distance-from-threshold with model agreement
             confidence_val = round((confidence_score * 0.6) + (agreement * 0.4), 4)
         else:
