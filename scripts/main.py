@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 # Add src to path
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import argparse
 import numpy as np
@@ -107,17 +107,18 @@ class KidneyDiseasePredictionSystem:
             self._feature_names = feature_names
             self._X_train_sample = X_train[:200]  # Store sample for SHAP background
         except Exception as e:
-            print(f"   ⚠️ SHAP initialization failed: {e}")
+            print(f"   [WARN] SHAP initialization failed: {e}")
         
         # Save models
         print("\n Saving models...")
         self.ensemble_model.feature_names = feature_names  # Persist for inference
         self.ensemble_model.ml_models.feature_names = feature_names
+        self.ensemble_model.scaler = self.data_loader.scaler
         self.ensemble_model.save()
         
         self.is_trained = True
         
-        print("\n✅ Training complete!")
+        print("\n[OK] Training complete!")
         return metrics
     
     def predict_from_features(
@@ -196,7 +197,15 @@ class KidneyDiseasePredictionSystem:
             # Keep only the exact columns in the exact order
             df_features = df_features[trained_features]
             
-        feature_vector = df_features.values
+        df_features = df_features.astype(float)
+        if getattr(self.ensemble_model, "scaler", None) is not None:
+            try:
+                feature_vector = self.ensemble_model.scaler.transform(df_features)
+            except Exception as e:
+                print(f"[WARN] Scaler transformation failed: {e}. Falling back to raw features.")
+                feature_vector = df_features.values
+        else:
+            feature_vector = df_features.values
         
         # Get ensemble prediction
         pred, confidence, details = self.ensemble_model.predict_with_confidence(feature_vector)

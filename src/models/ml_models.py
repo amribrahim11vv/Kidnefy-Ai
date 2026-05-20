@@ -142,8 +142,11 @@ class MLModels:
 
         # ═══════════════════════════════════════════════════════
         # [ALERT] EARLY STOPPING for XGBoost — stops when val loss
+        # =======================================================
+        # [ALERT] Phase 3: Early Stopping (for XGBoost)
+        #    Monitors validation loss; if validation loss
         #    stops improving, preventing the model from memorizing
-        # ═══════════════════════════════════════════════════════
+        # =======================================================
         try:
             if isinstance(model, xgb.XGBClassifier) and X_val is not None and y_val is not None:
                 # XGBoost with early stopping on validation set
@@ -156,7 +159,7 @@ class MLModels:
                 model.set_params(early_stopping_rounds=15)
                 model.fit(X_train, y_train, **fit_params)
                 actual_rounds = model.best_iteration + 1 if hasattr(model, 'best_iteration') else model.n_estimators
-                print(f"    🛑 Early Stopping: used {actual_rounds}/{model.n_estimators} rounds")
+                print(f"    [Stop] Early Stopping: used {actual_rounds}/{model.n_estimators} rounds")
                 # [ALERT] Reset early stopping so it doesn't break subsequent cross_val_score calls
                 model.set_params(early_stopping_rounds=None)
             elif sample_weight is not None:

@@ -484,13 +484,8 @@ class DataLoader:
         # Store feature names (after feature engineering)
         self.feature_names = X_train.columns.tolist()
         
-        # Phase 3: Scale features (fit on train ONLY)
-        X_train_scaled = self.scaler.fit_transform(X_train)
-        X_val_scaled = self.scaler.transform(X_val)
-        X_test_scaled = self.scaler.transform(X_test)
-        
         # ═══════════════════════════════════════════════════════
-        # [ALERT] Phase 4: FEATURE SELECTION — reduces noise features
+        # [ALERT] Phase 3: FEATURE SELECTION — reduces noise features
         #    Fit on TRAIN only, transform all sets
         #    This forces the model to learn from STRONG signals only
         # ═══════════════════════════════════════════════════════
@@ -498,39 +493,43 @@ class DataLoader:
             from sklearn.feature_selection import SelectFromModel
             from sklearn.ensemble import RandomForestClassifier as _RFC
             
-            n_features_before = X_train_scaled.shape[1]
+            n_features_before = X_train.shape[1]
             
-            # Use a lightweight RF to identify important features
+            # Use a lightweight RF to identify important features (scale-invariant)
             selector_model = _RFC(
                 n_estimators=50, max_depth=5, random_state=42, n_jobs=-1
             )
             self.feature_selector = SelectFromModel(
                 selector_model, threshold='median'
             )
-            self.feature_selector.fit(X_train_scaled, y_train)
+            self.feature_selector.fit(X_train, y_train)
             
-            X_train_scaled = self.feature_selector.transform(X_train_scaled)
-            X_val_scaled = self.feature_selector.transform(X_val_scaled)
-            X_test_scaled = self.feature_selector.transform(X_test_scaled)
+            X_train = pd.DataFrame(self.feature_selector.transform(X_train), columns=[f for f, m in zip(self.feature_names, self.feature_selector.get_support()) if m])
+            X_val = pd.DataFrame(self.feature_selector.transform(X_val), columns=X_train.columns)
+            X_test = pd.DataFrame(self.feature_selector.transform(X_test), columns=X_train.columns)
             
             # Update feature names to match selected features
-            mask = self.feature_selector.get_support()
-            self.feature_names = [f for f, m in zip(self.feature_names, mask) if m]
+            self.feature_names = X_train.columns.tolist()
             
-            print(f"   [TEST] Feature Selection: {n_features_before} → {X_train_scaled.shape[1]} features (kept top {X_train_scaled.shape[1]})")
+            print(f"   [TEST] Feature Selection: {n_features_before} -> {X_train.shape[1]} features (kept top {X_train.shape[1]})")
         
-        # ═══════════════════════════════════════════════════════
-        # [ALERT] Phase 5: SMOTE — synthetic oversampling (TRAIN only)
+        # Phase 4: Scale features (fit on train ONLY)
+        X_train_scaled = self.scaler.fit_transform(X_train)
+        X_val_scaled = self.scaler.transform(X_val)
+        X_test_scaled = self.scaler.transform(X_test)
+        
+        # =======================================================
+        # [ALERT] Phase 5: SMOTE -- synthetic oversampling (TRAIN only)
         #    Generates synthetic minority samples to balance classes
         #    WITHOUT using any real test/val data
-        # ═══════════════════════════════════════════════════════
+        # =======================================================
         if use_smote:
             try:
                 from imblearn.over_sampling import SMOTE
                 n_before = X_train_scaled.shape[0]
                 sm = SMOTE(random_state=42, k_neighbors=min(3, min(np.bincount(y_train.astype(int))) - 1))
                 X_train_scaled, y_train = sm.fit_resample(X_train_scaled, y_train)
-                print(f"   ⚗️  SMOTE: Training samples {n_before} → {X_train_scaled.shape[0]}")
+                print(f"   [OK]  SMOTE: Training samples {n_before} -> {X_train_scaled.shape[0]}")
             except ImportError:
                 print("   [WARN]  SMOTE skipped: install imbalanced-learn (`pip install imbalanced-learn`)")
             except Exception as e:

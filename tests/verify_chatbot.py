@@ -7,7 +7,7 @@ import sys
 import os
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # Manually load .env file to avoid python-dotenv dependency issues
 env_path = Path(".env")

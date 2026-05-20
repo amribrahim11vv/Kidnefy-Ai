@@ -36,6 +36,7 @@ class EnsembleModel:
         self.is_trained = False
         self.training_metrics: Dict[str, Any] = {}
         self.feature_names: List[str] = []  # Persist for inference alignment
+        self.scaler = None
         
     def train(
         self,
@@ -66,7 +67,7 @@ class EnsembleModel:
         print("Training Ensemble Model (Anti-Overfitting Mode)")
         print("=" * 60)
         
-        # ─── ML Models: Train + Evaluate ───
+        # === ML Models: Train + Evaluate ===
         ml_metrics = self.ml_models.train_all_models(
             X_train, y_train, X_test, y_test,
             X_val=X_val, y_val=y_val,
@@ -74,10 +75,10 @@ class EnsembleModel:
             calibration_method="isotonic",
         )
         
-        # ─── K-Fold Cross-Validation on TRAINING set (10-fold, stratified) ───
-        print("\n" + "─" * 60)
+        # === K-Fold Cross-Validation on TRAINING set (10-fold, stratified) ===
+        print("\n" + "=" * 60)
         print("K-Fold Cross-Validation (10-Fold Stratified on Training Set)")
-        print("─" * 60)
+        print("=" * 60)
         cv_results = {}
         skf = StratifiedKFold(n_splits=10, shuffle=True, random_state=42)
         for name in ['Random Forest', 'XGBoost', 'SVM']:
@@ -92,8 +93,8 @@ class EnsembleModel:
                 stability = "[OK] STABLE" if scores.std() < 0.03 else "[WARN] UNSTABLE" if scores.std() < 0.05 else "[ERROR] VERY UNSTABLE"
                 print(f"  {name:20} | CV F1: {scores.mean():.4f} ± {scores.std():.4f} | {stability}")
         
-        # ─── DL Model: Train with VALIDATION set (NOT test) ───
-        print("\n" + "─" * 40)
+        # === DL Model: Train with VALIDATION set (NOT test) ===
+        print("\n" + "=" * 40)
         self.dl_model.build_model(input_dim=X_train.shape[1])
         self.dl_model.train(
             X_train, y_train,
@@ -108,10 +109,10 @@ class EnsembleModel:
             'Deep Learning': dl_metrics
         }
         
-        # ─── Comprehensive Overfitting Diagnostic: Train vs Val vs Test ───
-        print("\n" + "─" * 70)
+        # === Comprehensive Overfitting Diagnostic: Train vs Val vs Test ===
+        print("\n" + "=" * 70)
         print("[TEST] OVERFITTING DIAGNOSTIC: Train vs Val vs Test")
-        print("─" * 70)
+        print("=" * 70)
         print(f"{'Model':20} | {'Train':>8} | {'Val':>8} | {'Test':>8} | {'T-V Gap':>8} | {'T-T Gap':>8} | {'Status'}")
         print("-" * 85)
         
@@ -161,12 +162,12 @@ class EnsembleModel:
         else:
             print("\n  [OK] All models show healthy generalization gaps!")
         
-        # ─── Update weights based on VALIDATION performance (not test) ───
+        # === Update weights based on VALIDATION performance (not test) ===
         self._update_weights()
         
         self.is_trained = True
         
-        # ─── Final Summary ───
+        # === Final Summary ===
         print("\n" + "=" * 60)
         print("Ensemble Training Summary")
         print("=" * 60)
@@ -318,6 +319,12 @@ class EnsembleModel:
         weights_path = self.model_dir / f"{prefix}_weights.joblib"
         joblib.dump(self.weights, weights_path)
         
+        # Save scaler if present
+        if getattr(self, 'scaler', None) is not None:
+            scaler_path = self.model_dir / f"{prefix}_scaler.joblib"
+            joblib.dump(self.scaler, scaler_path)
+            print(f"Saved scaler to {scaler_path}")
+        
         # Save feature names for inference alignment
         meta_path = self.model_dir / f"{prefix}_metadata.joblib"
         joblib.dump({
@@ -340,6 +347,14 @@ class EnsembleModel:
             meta = joblib.load(meta_path)
             self.feature_names = meta.get('feature_names', [])
         self.ml_models.feature_names = self.feature_names or None
+
+        # Load scaler if present
+        scaler_path = self.model_dir / f"{prefix}_scaler.joblib"
+        if scaler_path.exists():
+            self.scaler = joblib.load(scaler_path)
+            print(f"Loaded scaler from {scaler_path}")
+        else:
+            self.scaler = None
 
         joblib_names = {
             "Random Forest": "random_forest_model.joblib",

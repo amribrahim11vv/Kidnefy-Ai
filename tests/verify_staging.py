@@ -8,13 +8,13 @@ from pathlib import Path
 import os
 
 # Add project root to path
-PROJECT_ROOT = Path(__file__).parent.absolute()
+PROJECT_ROOT = Path(__file__).parent.parent.absolute()
 sys.path.insert(0, str(PROJECT_ROOT))
 try:
     from src.models.staging_model import StagingModel
-    print("✅ Successfully imported StagingModel")
+    print("[OK] Successfully imported StagingModel")
 except ImportError as e:
-    print(f"❌ Failed to import StagingModel: {e}")
+    print(f"[FAIL] Failed to import StagingModel: {e}")
     sys.exit(1)
 
 def verify():
@@ -24,11 +24,11 @@ def verify():
     try:
         model = StagingModel()
     except Exception as e:
-        print(f"❌ Initialization failed: {e}")
+        print(f"[FAIL] Initialization failed: {e}")
         return
 
     if not model.model:
-        print("⚠️ Model not loaded (check if xgb_staging.json exists)")
+        print("[WARN] Model not loaded (check if xgb_staging.json exists)")
         return
 
     # 2. Predict (Stage 4 case)
@@ -52,12 +52,12 @@ def verify():
         print(f"   Probabilities: {result['probabilities']}")
         
         if result['predicted_stage'] in [4, 5]:
-            print("✅ Logic Check: High creatinine correctly predicted advanced stage.")
+            print("[OK] Logic Check: High creatinine correctly predicted advanced stage.")
         else:
-            print("⚠️ Logic Check: Prediction seems unexpected for high creatinine.")
+            print("[WARN] Logic Check: Prediction seems unexpected for high creatinine.")
             
     except Exception as e:
-        print(f"❌ Prediction failed: {e}")
+        print(f"[FAIL] Prediction failed: {e}")
 
 if __name__ == "__main__":
     verify()

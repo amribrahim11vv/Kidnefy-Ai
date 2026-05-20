@@ -265,6 +265,7 @@ kidney_disease_prediction/
 |
 |-- docs/                     <- Comprehensive Team Documentation
 |   |-- TEAM_ONBOARDING_GUIDE.md <- Ultimate guide for new developers
+|   |-- COMPLETE_DEVELOPER_GUIDE.md <- Detailed code & architecture manual (Recommended)
 |   +-- CODEBASE_MAP.md       <- Detailed index of what every file does
 |
 |-- models/                   <- AI Models Folder
