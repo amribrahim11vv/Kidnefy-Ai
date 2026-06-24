@@ -15,14 +15,14 @@ def test_health():
     try:
         response = requests.get(f"{BASE_URL}/health")
         if response.status_code == 200:
-            print("✅ API is online!")
+            print("[OK] API is online!")
             print(json.dumps(response.json(), indent=2))
             return True
         else:
-            print(f"❌ API returned status code {response.status_code}")
+            print(f"[FAIL] API returned status code {response.status_code}")
             return False
     except requests.exceptions.ConnectionError:
-        print("❌ Could not connect to API. Is it running?")
+        print("[FAIL] Could not connect to API. Is it running?")
         return False
 
 def test_prediction():
@@ -50,16 +50,16 @@ def test_prediction():
         
         if response.status_code == 200:
             result = response.json()
-            print(f"✅ Prediction successful! ({duration:.2f}s)")
+            print(f"[OK] Prediction successful! ({duration:.2f}s)")
             print(f"  Prediction: {'Positive' if result['prediction'] else 'Negative'}")
             print(f"  Probability: {result['probability']:.2%}")
             print(f"  Stage: {result['gfr_stage']}")
             print(f"  Risk Level: {result['risk_level']}")
         else:
-            print(f"❌ Prediction failed: {response.text}")
+            print(f"[FAIL] Prediction failed: {response.text}")
             
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"[FAIL] Error: {e}")
 
 def test_staging():
     """Test staging endpoint."""
@@ -77,15 +77,15 @@ def test_staging():
         
         if response.status_code == 200:
             result = response.json()
-            print("✅ Staging successful!")
+            print("[OK] Staging successful!")
             print(f"  eGFR: {result['egfr']}")
             print(f"  Stage: {result['gfr_stage']}")
             print(f"  Description: {result['description']}")
         else:
-            print(f"❌ Staging failed: {response.text}")
+            print(f"[FAIL] Staging failed: {response.text}")
             
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"[FAIL] Error: {e}")
 
 if __name__ == "__main__":
     print(f"Connecting to {BASE_URL}...")
@@ -94,5 +94,5 @@ if __name__ == "__main__":
         test_staging()
         test_prediction()
     else:
-        print("\n⚠️ Please run the API server first:")
+        print("\n[WARN] Please run the API server first:")
         print("   python api.py")

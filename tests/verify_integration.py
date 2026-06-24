@@ -1,28 +1,27 @@
-
 import sys
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 def verify():
     print(" Starting verification...")
     
     try:
         from main import KidneyDiseasePredictionSystem
-        print("✅ Imported KidneyDiseasePredictionSystem")
+        print("[OK] Imported KidneyDiseasePredictionSystem")
         
         system = KidneyDiseasePredictionSystem()
-        print("✅ Initialized System")
+        print("[OK] Initialized System")
         
         try:
-            print("⏳ Loading models...")
+            print("Loading models...")
             system.ensemble_model.load()
             system.is_trained = system.ensemble_model.is_trained
             if not system.is_trained:
-                print("⚠️ No checkpoint files found; train first (python main.py train)")
+                print("[WARN] No checkpoint files found; train first (python main.py train)")
                 return
-            print("✅ Models loaded successfully")
+            print("[OK] Models loaded successfully")
         except Exception as e:
-            print(f"❌ Failed to load models: {e}")
+            print(f"[FAIL] Failed to load models: {e}")
             print("   (This likely means training didn't finish or failed)")
             return
 
@@ -43,7 +42,7 @@ def verify():
         
         try:
             result = system.predict_from_features(features)
-            print("\n✅ Prediction successful!")
+            print("\n[OK] Prediction successful!")
             print(f"   Probability: {result['probability']:.4f}")
             print(f"   Prediction: {result['prediction']}")
             print(f"   GFR Stage: {result['gfr_stage']}")
@@ -53,14 +52,14 @@ def verify():
             # Hard to check internally without debug prints, but if it runs without error, mapping worked.
             
         except Exception as e:
-            print(f"❌ Prediction failed: {e}")
+            print(f"[FAIL] Prediction failed: {e}")
             import traceback
             traceback.print_exc()
 
     except ImportError as e:
-        print(f"❌ Import failed: {e}")
+        print(f"[FAIL] Import failed: {e}")
     except Exception as e:
-        print(f"❌ params failed: {e}")
+        print(f"[FAIL] params failed: {e}")
 
 if __name__ == "__main__":
     verify()

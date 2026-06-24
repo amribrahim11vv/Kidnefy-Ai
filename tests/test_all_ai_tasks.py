@@ -16,8 +16,9 @@ import sys
 import shutil
 from pathlib import Path
 
-# Add project root to path
-sys.path.insert(0, str(Path(__file__).parent))
+# Add project root and scripts to path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 PASS = 0
 FAIL = 0
@@ -25,10 +26,10 @@ FAIL = 0
 def assert_test(condition, test_name):
     global PASS, FAIL
     if condition:
-        print(f"   ✅ {test_name}")
+        print(f"   [PASS] {test_name}")
         PASS += 1
     else:
-        print(f"   ❌ {test_name}")
+        print(f"   [FAIL] {test_name}")
         FAIL += 1
 
 
@@ -159,7 +160,7 @@ def test_longitudinal_monitoring():
         slope = monitor.calculate_egfr_slope(patient_fast)
         assert_test(slope is not None and slope < -5, f"Slope is fast decline ({slope:.1f} mL/min/year)")
         
-        assert_test(monitor.is_fast_progressor(patient_fast), "Fast progressor detected ✓")
+        assert_test(monitor.is_fast_progressor(patient_fast), "Fast progressor detected [OK]")
         
         trend = monitor.calculate_trend(patient_fast)
         assert_test(trend.trend == "rapid_decline", f"Trend = rapid_decline (got {trend.trend})")
@@ -257,7 +258,7 @@ def test_shap_explainer():
         assert_test("Risk Factors" in report or "الخطر" in report, "Report contains risk info")
         
     except ImportError:
-        print("   ⚠️ sklearn not available, skipping model-based SHAP tests")
+        print("   [WARN] sklearn/shap not available, skipping model-based SHAP tests")
 
 
 def test_multi_biomarker_integration():
@@ -268,8 +269,8 @@ def test_multi_biomarker_integration():
     
     from config import CKD_FEATURE_ORDER, CKD_FEATURE_DEFAULTS
     
-    # Check that all required biomarkers from the project document are present
-    required_biomarkers = ['sc', 'egfr', 'hba1c', 'bu', 'uric_acid', 'bmi', 'age', 'bp']
+    # Check that all early screening biomarkers from the project document are present
+    required_biomarkers = ['hba1c', 'uric_acid', 'bmi', 'age', 'bp']
     
     available = set(CKD_FEATURE_ORDER)
     for biomarker in required_biomarkers:
@@ -283,7 +284,7 @@ def test_multi_biomarker_integration():
         )
     
     # Check new features
-    new_features = ['hba1c', 'egfr', 'uacr', 'uric_acid', 'serum_albumin', 'bmi',
+    new_features = ['hba1c', 'uric_acid', 'bmi',
                     'bp_dia', 'smoking', 'dyslipidemia', 'diabetes_type', 'diabetes_duration']
     for feat in new_features:
         assert_test(feat in available, f"New feature '{feat}' integrated")

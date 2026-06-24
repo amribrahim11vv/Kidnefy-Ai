@@ -28,13 +28,13 @@ class FeatureEngineer:
         is_black: bool = False
     ) -> float:
         """
-        Calculate estimated Glomerular Filtration Rate (eGFR) using CKD-EPI formula.
+        Calculate estimated Glomerular Filtration Rate (eGFR) using the race-free CKD-EPI 2021 equation.
         
         Args:
             creatinine: Serum creatinine in mg/dL
             age: Patient age in years
             is_female: True if patient is female
-            is_black: True if patient is African American
+            is_black: Deprecated/ignored parameter (aligned with race-free 2021 standard)
             
         Returns:
             eGFR value in mL/min/1.73m²
@@ -42,24 +42,18 @@ class FeatureEngineer:
         if creatinine <= 0 or age <= 0:
             return 0.0
             
-        # CKD-EPI equation constants
+        # CKD-EPI 2021 (race-free equation)
         if is_female:
-            kappa = 0.7
-            alpha = -0.329
-            sex_factor = 1.018
+            if creatinine <= 0.7:
+                egfr = 142 * ((creatinine / 0.7) ** -0.241) * (0.9938 ** age) * 1.012
+            else:
+                egfr = 142 * ((creatinine / 0.7) ** -1.200) * (0.9938 ** age) * 1.012
         else:
-            kappa = 0.9
-            alpha = -0.411
-            sex_factor = 1.0
-            
-        race_factor = 1.159 if is_black else 1.0
-        
-        # Calculate eGFR
-        min_cr = min(creatinine / kappa, 1)
-        max_cr = max(creatinine / kappa, 1)
-        
-        egfr = 141 * (min_cr ** alpha) * (max_cr ** -1.209) * (0.993 ** age) * sex_factor * race_factor
-        
+            if creatinine <= 0.9:
+                egfr = 142 * ((creatinine / 0.9) ** -0.302) * (0.9938 ** age)
+            else:
+                egfr = 142 * ((creatinine / 0.9) ** -1.200) * (0.9938 ** age)
+                
         return round(egfr, 2)
     
     def get_gfr_stage(self, egfr: float) -> str:

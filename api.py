@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, BackgroundTasks
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 import uvicorn
 
@@ -203,13 +204,19 @@ class WhatIfRequest(BaseModel):
 
 class ChatRequest(BaseModel):
     """Request body for the medical chatbot endpoint."""
-    question: str = Field(..., description="The user's question")
+    question: str = Field(..., min_length=3, description="Question about kidney disease")
     patient_id: Optional[str] = Field(None, description="Optional patient ID to include clinical context")
+    patient_context: Optional[Dict[str, Any]] = Field(None, description="Optional patient context")
 
     class Config:
         json_schema_extra = {
             "example": {
-                "question": "ما هي الأطعمة الممنوعة لمريض الكلى في المرحلة الثالثة؟"
+                "question": "ما هي الأطعمة الممنوعة لمريض الكلى في المرحلة الثالثة؟",
+                "patient_id": "P001",
+                "patient_context": {
+                    "egfr": 28,
+                    "gfr_stage": "G4"
+                }
             }
         }
 
@@ -650,7 +657,14 @@ async def predict(request: PredictionRequest):
             
             # Get probability
             df_features = df_features.astype(float)  # Prevent XGBoost object dtype crash
-            feature_vector = df_features.values
+            if getattr(ensemble_model, "scaler", None) is not None:
+                try:
+                    feature_vector = ensemble_model.scaler.transform(df_features)
+                except Exception as e:
+                    print(f"[WARN] Scaler transformation failed: {e}. Falling back to raw features.")
+                    feature_vector = df_features.values
+            else:
+                feature_vector = df_features.values
             _, _, details = ensemble_model.predict_with_confidence(feature_vector)
             probability = float(details['ensemble_proba'][0])
             
@@ -794,8 +808,6 @@ def _whatif_evaluate_scenario(scenario: WhatIfPatientData) -> Dict[str, Any]:
                 val = dm_val
             elif f == "htn":
                 val = 1 if scenario.bp >= 140 else 0
-            elif f == "su":
-                val = scenario.al  # approximate sugar from albumin
             else:
                 val = CKD_FEATURE_DEFAULTS.get(f, 0)
             feature_dict[f] = [val]
@@ -814,7 +826,16 @@ def _whatif_evaluate_scenario(scenario: WhatIfPatientData) -> Dict[str, Any]:
                     df_features[col] = 0
             df_features = df_features[trained_features]
 
-        feature_vector = df_features.values
+        # Apply scaling and predict
+        df_features = df_features.astype(float)
+        if getattr(ensemble_model, "scaler", None) is not None:
+            try:
+                feature_vector = ensemble_model.scaler.transform(df_features)
+            except Exception as e:
+                print(f"[WARN] Scaler transformation failed: {e}. Falling back to raw features.")
+                feature_vector = df_features.values
+        else:
+            feature_vector = df_features.values
         _, _, details = ensemble_model.predict_with_confidence(feature_vector)
         probability = float(details['ensemble_proba'][0])
     else:
@@ -927,14 +948,19 @@ async def predict_from_image(
             )
     
     try:
-        # Save uploaded file
+        # Save uploaded file asynchronously
         upload_path = Path("uploads") / f"temp_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
-        with open(upload_path, "wb") as f:
-            content = await image.read()
-            f.write(content)
+        content = await image.read()
         
-        # Extract data
-        extraction = ocr_extractor.extract_all(str(upload_path))
+        def save_temp_file(path, data):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "wb") as f:
+                f.write(data)
+                
+        await run_in_threadpool(save_temp_file, upload_path, content)
+        
+        # Extract data asynchronously
+        extraction = await run_in_threadpool(ocr_extractor.extract_all, str(upload_path))
         
         # Get patient info from extraction or use provided
         patient_info = extraction.get('patient_info', {})
@@ -996,8 +1022,8 @@ async def predict_from_image(
         else:
             result_data["warning"] = "Creatinine not found in image. Showing extracted values only."
         
-        # Clean up
-        upload_path.unlink(missing_ok=True)
+        # Clean up asynchronously
+        await run_in_threadpool(upload_path.unlink, True)
         
         return result_data
         
@@ -1093,7 +1119,8 @@ async def generate_report(
         filename = f"kidney_report_{timestamp}.pdf"
         
         # Generate report
-        filepath = report_generator.generate_report(
+        filepath = await run_in_threadpool(
+            report_generator.generate_report,
             patient=patient_info,
             prediction=staging.gfr_stage not in [GFRStage.G1, GFRStage.G2],
             probability=probability,
@@ -1147,83 +1174,12 @@ async def download_report(filename: str):
 # RAG / Chat Endpoints
 # =============================================================================
 
-class ChatRequest(BaseModel):
-    """Request body for chat endpoint."""
-    question: str = Field(..., min_length=3, description="Question about kidney disease")
-    patient_context: Optional[Dict[str, Any]] = Field(None, description="Optional patient context")
-    
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "question": "What does eGFR 28 mean?",
-                "patient_context": {
-                    "egfr": 28,
-                    "gfr_stage": "G4"
-                }
-            }
-        }
-
-
 class ExplainRequest(BaseModel):
     """Request for result explanation."""
     egfr: float
     gfr_stage: str
     acr: Optional[float] = None
     risk_level: Optional[str] = None
-
-
-@app.post("/chat", tags=["Chat/RAG"])
-async def chat(request: ChatRequest):
-    """
-    Ask a question about kidney disease.
-    
-    Uses RAG (Retrieval-Augmented Generation) with medical knowledge base
-    and Google Gemini for intelligent responses.
-    
-    اسأل سؤال عن أمراض الكلى واحصل على إجابة ذكية من قاعدة المعرفة الطبية.
-    """
-    global rag_engine
-    
-    if RAG_AVAILABLE and rag_engine is None:
-        try:
-            from src.rag import GeminiRAG
-            rag_engine = GeminiRAG()
-        except Exception as e:
-            print(f"RAG dynamic initialization failed: {e}")
-            
-    if not RAG_AVAILABLE or rag_engine is None:
-        return {
-            "answer": "عذراً دكتور، نظام الذكاء الاصطناعي للمحادثة (RAG) غير متصل حالياً. يرجى التأكد من إضافة مفتاح `GEMINI_API_KEY` في ملف `.env` وتثبيت المكتبات المطلوبة ليعمل النظام بشكل كامل.",
-            "sources": [],
-            "disclaimer": "النظام في وضع عدم الاتصال (Offline Mode)."
-        }
-    
-    try:
-        result = rag_engine.ask(
-            question=request.question,
-            patient_context=request.patient_context,
-            include_sources=True
-        )
-        
-        if result.get("error"):
-             return {
-                "answer": f"عذراً، حدث خطأ أثناء الاتصال بنموذج اللغة: {result.get('answer')}",
-                "sources": [],
-                "disclaimer": ""
-            }
-        
-        return {
-            "answer": result["answer"],
-            "sources": result["sources"],
-            "disclaimer": "هذه المعلومات للأغراض التعليمية فقط. يرجى استشارة طبيب للتشخيص والعلاج."
-        }
-        
-    except Exception as e:
-        return {
-            "answer": f"عذراً، حدث خطأ غير متوقع: {str(e)}",
-            "sources": [],
-            "disclaimer": ""
-        }
 
 
 @app.post("/explain", tags=["Chat/RAG"])
@@ -1349,7 +1305,8 @@ async def generate_pdf_report(request: ReportRequest):
                 is_abnormal=request.acr >= 30
             ))
 
-        filepath = report_generator.generate_report(
+        filepath = await run_in_threadpool(
+            report_generator.generate_report,
             patient=patient,
             prediction=request.prediction,
             probability=request.probability,
@@ -1613,44 +1570,65 @@ async def chat_with_medical_assistant(request: ChatRequest):
     Uses Gemini LLM + RAG (Retrieval-Augmented Generation) to answer medical questions
     about kidney disease based on KDIGO guidelines and provided patient context.
     """
+    global rag_engine
+    
+    if RAG_AVAILABLE and rag_engine is None:
+        try:
+            from src.rag import GeminiRAG
+            rag_engine = GeminiRAG()
+        except Exception as e:
+            print(f"RAG dynamic initialization failed: {e}")
+            
     if not RAG_AVAILABLE or rag_engine is None:
-        raise HTTPException(
-            status_code=503, 
-            detail="Chatbot service is currently unavailable. Ensure GEMINI_API_KEY is configured."
-        )
+        return {
+            "answer": "عذراً دكتور، نظام الذكاء الاصطناعي للمحادثة (RAG) غير متصل حالياً. يرجى التأكد من إضافة مفتاح `GEMINI_API_KEY` في ملف `.env` وتثبيت المكتبات المطلوبة ليعمل النظام بشكل كامل.",
+            "sources": [],
+            "disclaimer": "النظام في وضع عدم الاتصال (Offline Mode)."
+        }
     
     try:
-        patient_context = None
-        # If a patient ID is provided, try to fetch their latest lab context
+        # Start with patient context passed in the request body if any
+        patient_context = request.patient_context or None
+        
+        # If a patient ID is provided, try to fetch their latest lab context and override/merge
         if request.patient_id and longitudinal_monitor:
             history = longitudinal_monitor.get_patient_history(request.patient_id)
             if history:
                 latest = history[-1]
+                egfr_val = latest.get("egfr")
+                acr_val = latest.get("uacr") or latest.get("acr")
                 patient_context = {
-                    "egfr": latest.get("egfr"),
-                    "acr": latest.get("uacr"),
-                    "gfr_stage": gfr_calculator.get_gfr_stage(latest.get("egfr", 90)).value if latest.get("egfr") else None
+                    "egfr": egfr_val,
+                    "acr": acr_val,
+                    "gfr_stage": gfr_calculator.get_gfr_stage(egfr_val).value if egfr_val else None
                 }
 
-        # Query the RAG engine
-        response = rag_engine.ask(
+        # Query the RAG engine in a thread pool to avoid blocking the event loop
+        response = await run_in_threadpool(
+            rag_engine.ask,
             question=request.question,
             patient_context=patient_context,
             include_sources=True
         )
         
         if response.get("error"):
-            raise HTTPException(status_code=500, detail=response.get("answer"))
+            return {
+                "answer": f"عذراً، حدث خطأ أثناء الاتصال بنموذج اللغة: {response.get('answer') or response.get('error')}",
+                "sources": [],
+                "disclaimer": ""
+            }
             
         # Add a medical disclaimer to the response
         response["disclaimer"] = "تنبيه: هذه إجابة من الذكاء الاصطناعي بناءً على إرشادات طبية، وليست بديلاً عن استشارة الطبيب المختص."
             
         return response
         
-    except HTTPException:
-        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Chatbot failed: {str(e)}")
+        return {
+            "answer": f"عذراً، حدث خطأ غير متوقع: {str(e)}",
+            "sources": [],
+            "disclaimer": ""
+        }
 
 
 # =============================================================================
@@ -1676,12 +1654,19 @@ async def generate_diet_plan(request: DietRequest):
 
     # Auto-derive stage label from eGFR if not provided
     stage_label = request.stage
+    valid_stages = {"G1", "G2", "G3a", "G3b", "G4", "G5"}
+    if stage_label and stage_label.upper() not in valid_stages:
+        stage_label = "Unknown"
+
     if not stage_label and request.egfr is not None:
         try:
             gfr_stage_obj = gfr_calculator.get_gfr_stage(request.egfr)
             stage_label = gfr_stage_obj.value
         except Exception:
             stage_label = "Unknown"
+
+    diabetes_val = "yes" if request.diabetes and request.diabetes.lower() in ["yes", "y", "true", "1"] else "no"
+    hypertension_val = "yes" if request.hypertension and request.hypertension.lower() in ["yes", "y", "true", "1"] else "no"
 
     patient_data = {
         "age":         request.age,
@@ -1690,12 +1675,12 @@ async def generate_diet_plan(request: DietRequest):
         "stage":       stage_label or "Unknown",
         "potassium":   request.potassium,
         "sodium":      request.sodium,
-        "diabetes":    request.diabetes,
-        "hypertension":request.hypertension,
+        "diabetes":    diabetes_val,
+        "hypertension":hypertension_val,
     }
 
     try:
-        plan_markdown = diet_planner.generate_diet_plan(patient_data)
+        plan_markdown = await run_in_threadpool(diet_planner.generate_diet_plan, patient_data)
         return {
             "status":       "success",
             "stage":        stage_label,
@@ -1757,7 +1742,7 @@ async def predict_ct_kidney(
 
     try:
         image_bytes = await file.read()
-        result = ct_classifier.predict(image_bytes)
+        result = await run_in_threadpool(ct_classifier.predict, image_bytes)
 
         if "error" in result and result["prediction"] is None:
             raise HTTPException(status_code=500, detail=result["error"])
